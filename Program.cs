@@ -26,20 +26,18 @@ if (args.Length > 0)
         Console.WriteLine("Arguments are --device SAMS (can be part of the name of the sound device, for example given this will match to SAMSUNG TV");
 
         return;
-    } 
-    else
-    {
-        if(args.Length != 6)
-        {
-            Console.WriteLine("Wrong number of parameters provided");
-        }
+    }
 
-        //0    1        2  3      4           5        6
-        //.exe --volume 20 --file C:\file.mp3 --device SAMSUNG (any order works)
-        for (int i = 0; i < 3; i ++)
-        {
-            CheckForPair(i * 2);
-        }
+    if(args.Length != 6)
+    {
+        Console.WriteLine("Wrong number of parameters provided");
+    }
+
+    //0    1        2  3      4           5        6
+    //.exe --volume 20 --file C:\file.mp3 --device SAMSUNG (any order works)
+    for (int i = 0; i < 3; i ++)
+    {
+        CheckForPair(i * 2);
     }
 } 
 else
@@ -53,7 +51,6 @@ using var soundOut = GetSoundOut();
 
 soundOut.Initialize(music);
 
-soundOut.Stopped += OnSoundStopped;
 
 soundOut.Volume = volumeInPercents / 100;
 
@@ -121,11 +118,6 @@ void UserInput()
 
 }
 
-void OnSoundStopped(object? sender, PlaybackStoppedEventArgs e)
-{
-    soundOut.Play();
-}
-
 void MainLoop()
 {
     try
@@ -152,27 +144,34 @@ void MainLoop()
 
 void AttemptChangingPlayState()
 {
-    using var meter = AudioMeterInformation.FromDevice(manager.GetDefaultDevice());
-
-    if (meter.PeakValue > volumeThreshold)
+    try
     {
-        Thread.Sleep(3000);
+        using var meter = AudioMeterInformation.FromDevice(manager.GetDefaultDevice());
 
-        if (meter.PeakValue > volumeThreshold && soundOut.PlaybackState != PlaybackState.Paused)
+        if (meter.PeakValue > volumeThreshold)
         {
-            Console.WriteLine($"Noise detected pausing music. Peak: {meter.PeakValue}");
+            Thread.Sleep(3000);
 
-            soundOut.Pause();
+            if (meter.PeakValue > volumeThreshold && soundOut.PlaybackState != PlaybackState.Paused)
+            {
+                Console.WriteLine($"Noise detected pausing music. Peak: {meter.PeakValue}");
+
+                soundOut.Pause();
+            }
+        }
+        else
+        {
+            if (soundOut.PlaybackState != PlaybackState.Playing)
+            {
+                Console.WriteLine($"Noise stopped starting music. Peak: {meter.PeakValue}");
+
+                soundOut.Play();
+            }
         }
     }
-    else
+    catch (Exception ex)
     {
-        if (soundOut.PlaybackState != PlaybackState.Playing)
-        {
-            Console.WriteLine($"Noise stopped starting music. Peak: {meter.PeakValue}");
-
-            soundOut.Play();
-        }
+        Console.WriteLine($"Caught an exception will try again in a couple seconds: {ex}");
     }
 }
 
