@@ -1,0 +1,36 @@
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (eq.: 8.0.0.1)'
+        required: true
+      downloadLink:
+        description: 'Url to the signed MSI'
+        required: true
+      isMandatory:
+        description: 'true or false'
+        required: true
+      phasingStrategy:
+        description: 'Optional flag can be left blank'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: 'your-s3-bucket-region'
+
+    - name: Create JSON file
+      run: echo "{\"version\":\"${{ github.event.inputs.version }}\",\"downloadLink\":\"${{ github.event.inputs.downloadLink }}\",\"isMandatory\":\"${{ github.event.inputs.isMandatory }}\",\"phasingStrategy\":\"${{ github.event.inputs.phasingStrategy }}\"}" > data.json
+
+    - name: Upload to S3
+      run: aws s3 cp data.json s3://windows-releases-bucket/
