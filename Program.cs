@@ -7,7 +7,7 @@ using NoSilence;
 
 int counter = 0;
 
-float volumeThreshold = 0.01f;
+float volumeThreshold = 0.0001f;
 int resetTime = 5; //*100ms
 var fileLocation = string.Empty;
 string? partOfOutputDevice = string.Empty;
@@ -50,7 +50,6 @@ using var music = GetMusic();
 using var soundOut = GetSoundOut();
 
 soundOut.Initialize(music);
-
 
 soundOut.Volume = volumeInPercents / 100;
 

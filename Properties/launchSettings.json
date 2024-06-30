@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "NoSilence": {
+      "commandName": "Project",
+      "commandLineArgs": "--volume 20 --file E:\\3am.mp3 --device SAMSUNG"
+    }
+  }
+}
