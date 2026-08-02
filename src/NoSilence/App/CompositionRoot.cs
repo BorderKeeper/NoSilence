@@ -19,7 +19,10 @@ internal static class CompositionRoot
     public static ServiceProvider Build(CommandLineOptions options)
     {
         var paths = AppPaths.Resolve(options.DataRoot);
-        ILoggerFactory loggerFactory = Logging.Build(paths, console: options.IsConsoleCommand, level: LogEventLevel.Information);
+        ILoggerFactory loggerFactory = Logging.Build(
+            paths,
+            console: options.IsConsoleCommand,
+            level: options.Verbose ? LogEventLevel.Debug : LogEventLevel.Information);
 
         var services = new ServiceCollection();
 

@@ -67,6 +67,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
     /// <summary>Reflects the current playback state in the icon and tooltip. Call on the UI thread.</summary>
     public void Apply(Playback.PlaybackSnapshot snapshot)
     {
+        // An inaudible output outranks whatever the phase says: reporting "Playing" while
+        // the room is silent is the least helpful thing the tray could do.
+        if (snapshot.Warning is { } warning)
+        {
+            SetState(TrayIconState.Error, $"NoSilence — {warning}");
+            return;
+        }
+
         (TrayIconState state, string text) = snapshot.Phase switch
         {
             Playback.PlaybackPhase.Playing => (TrayIconState.Playing, $"Playing: {snapshot.Track?.DisplayName ?? "…"}"),

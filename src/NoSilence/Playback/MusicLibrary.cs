@@ -35,17 +35,27 @@ internal sealed class MusicLibrary : IDisposable
     /// <summary>Raised after a rescan changed the track set. Fires on a background thread.</summary>
     public event EventHandler? Changed;
 
+    /// <summary>
+    /// Applies settings and kicks off a scan.
+    /// </summary>
+    /// <remarks>
+    /// The scan runs on a background thread rather than inline. A recursive scan of a folder
+    /// near the root of a large drive takes minutes, and doing it on the UI thread would
+    /// mean the tray icon appears and then hangs. Callers react to <see cref="Changed"/>
+    /// instead; an empty library is a perfectly valid state to start in.
+    /// </remarks>
     public void Configure(LibrarySettings settings)
     {
         _settings = settings;
-        Rescan();
         StartWatching();
+        _ = Task.Run(SafeRescan);
     }
 
     public void Rescan()
     {
         lock (_rescanGate)
         {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var extensions = new HashSet<string>(_settings.Extensions, StringComparer.OrdinalIgnoreCase);
             var found = new List<TrackInfo>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -62,12 +72,18 @@ internal sealed class MusicLibrary : IDisposable
             }
 
             found.Sort((a, b) => string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase));
+            stopwatch.Stop();
 
             bool changed = found.Count != Tracks.Count
                 || !found.Select(t => t.Path).SequenceEqual(Tracks.Select(t => t.Path), StringComparer.OrdinalIgnoreCase);
 
             Tracks = found;
-            _log.LogInformation("Library scan found {Count} tracks across {Folders} folder(s).", found.Count, _settings.Folders.Count);
+            _log.LogInformation(
+                "Library scan found {Count} tracks across {Folders} folder(s) in {Elapsed} ms ({Mode}).",
+                found.Count,
+                _settings.Folders.Count,
+                stopwatch.ElapsedMilliseconds,
+                _settings.Recursive ? "recursive" : "top level only");
 
             if (changed)
             {
@@ -80,7 +96,7 @@ internal sealed class MusicLibrary : IDisposable
     {
         var options = new EnumerationOptions
         {
-            RecurseSubdirectories = true,
+            RecurseSubdirectories = _settings.Recursive,
             IgnoreInaccessible = true,       // a permission-denied subfolder must not abort the scan
             AttributesToSkip = FileAttributes.System | FileAttributes.Temporary,
             MatchCasing = MatchCasing.CaseInsensitive,
@@ -137,7 +153,7 @@ internal sealed class MusicLibrary : IDisposable
             {
                 var watcher = new FileSystemWatcher(folder)
                 {
-                    IncludeSubdirectories = true,
+                    IncludeSubdirectories = _settings.Recursive,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
                     // The default 8 KB buffer overflows easily on a big folder tree, and an
                     // overflow silently drops events.

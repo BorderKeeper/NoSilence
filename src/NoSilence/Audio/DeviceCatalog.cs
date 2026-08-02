@@ -21,11 +21,52 @@ internal sealed class DeviceCatalog : IDisposable
 {
     private readonly ILogger<DeviceCatalog> _log;
     private readonly MMDeviceEnumerator _enumerator = new();
+    private NAudio.CoreAudioApi.Interfaces.IMMNotificationClient? _notificationClient;
     private bool _disposed;
 
     public DeviceCatalog(ILogger<DeviceCatalog> log) => _log = log;
 
     internal MMDeviceEnumerator Enumerator => _enumerator;
+
+    /// <summary>
+    /// Starts delivering endpoint add/remove/state notifications. Only one client at a
+    /// time; registering a second replaces the first.
+    /// </summary>
+    public void RegisterNotifications(NAudio.CoreAudioApi.Interfaces.IMMNotificationClient client)
+    {
+        UnregisterNotifications();
+
+        try
+        {
+            _enumerator.RegisterEndpointNotificationCallback(client);
+            _notificationClient = client;
+            _log.LogDebug("Registered for endpoint notifications.");
+        }
+        catch (COMException ex)
+        {
+            // Not fatal: the retry timer still finds the device, just more slowly.
+            _log.LogWarning(ex, "Could not register for endpoint notifications; falling back to polling.");
+        }
+    }
+
+    public void UnregisterNotifications()
+    {
+        if (_notificationClient is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _enumerator.UnregisterEndpointNotificationCallback(_notificationClient);
+        }
+        catch (COMException ex)
+        {
+            _log.LogDebug(ex, "Ignoring an error while unregistering endpoint notifications.");
+        }
+
+        _notificationClient = null;
+    }
 
     /// <summary>
     /// Lists endpoints as immutable snapshots.
@@ -137,6 +178,7 @@ internal sealed class DeviceCatalog : IDisposable
         }
 
         _disposed = true;
+        UnregisterNotifications();
         _enumerator.Dispose();
     }
 }

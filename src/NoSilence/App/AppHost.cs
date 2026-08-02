@@ -59,6 +59,9 @@ internal sealed class AppHost : IDisposable
         _engine.Tick += _playback.Poll;
         _engine.Start();
 
+        // Registered after the engine thread exists, because endpoint notifications are
+        // posted straight onto it.
+        _playback.Start();
         _playback.Configure(settings);
 
         _tray.ExitRequested += (_, _) => _log.LogInformation("Exit requested from the tray.");

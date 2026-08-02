@@ -65,6 +65,9 @@ internal sealed record CommandLineOptions
     /// <summary>Discard settings.json and start from defaults.</summary>
     public bool ResetSettings { get; init; }
 
+    /// <summary>Log at debug level — shows every decision the device state machine makes.</summary>
+    public bool Verbose { get; init; }
+
     /// <summary>True for the commands that write to stdout and need a console attached.</summary>
     public bool IsConsoleCommand => Command is AppCommand.ListDevices or AppCommand.Diagnose
         or AppCommand.Replay or AppCommand.DiscoverTv or AppCommand.WriteIcon or AppCommand.Help
@@ -81,6 +84,7 @@ internal sealed record CommandLineOptions
         bool play = false;
         bool showSettings = false;
         bool resetSettings = false;
+        bool verbose = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -125,6 +129,10 @@ internal sealed record CommandLineOptions
 
                 case "reset-settings":
                     resetSettings = true;
+                    break;
+
+                case "verbose" or "v":
+                    verbose = true;
                     break;
 
                 case "replay":
@@ -216,6 +224,7 @@ internal sealed record CommandLineOptions
             IconPath = iconPath,
             ShowSettings = showSettings,
             ResetSettings = resetSettings,
+            Verbose = verbose,
         };
         error = null;
         return true;
@@ -261,6 +270,9 @@ internal sealed record CommandLineOptions
 
         Other:
           --data-root DIR         Use DIR instead of %APPDATA%\NoSilence.
+          --verbose               Log at debug level. Shows every decision the output
+                                  device state machine makes - useful when the TV is not
+                                  being picked up.
           --help                  This text.
         """;
 }

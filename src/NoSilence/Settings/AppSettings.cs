@@ -23,8 +23,14 @@ internal sealed class AppSettings
 
 internal sealed class LibrarySettings
 {
-    /// <summary>Folders scanned recursively for music.</summary>
+    /// <summary>Folders scanned for music.</summary>
     public List<string> Folders { get; set; } = [];
+
+    /// <summary>
+    /// Whether to descend into subfolders. On by default, but worth being able to turn off:
+    /// a folder at the root of a large drive would otherwise walk the entire drive.
+    /// </summary>
+    public bool Recursive { get; set; } = true;
 
     /// <summary>
     /// Only formats Windows can actually decode without extra codecs. Ogg and Opus are

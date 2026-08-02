@@ -38,8 +38,20 @@ internal sealed record PlaybackSnapshot(
     string? DeviceName,
     string? Detail)
 {
+    /// <summary>
+    /// Set when audio is flowing but you would not hear it anyway — the endpoint is muted
+    /// or its volume is near zero.
+    /// </summary>
+    /// <remarks>
+    /// Worth its own field rather than folding into <see cref="Detail"/>, because
+    /// "NoSilence says it is playing and I hear nothing" is the single most confusing thing
+    /// this app can do, and the cause is invisible: the TV's endpoint has a separate Windows
+    /// volume slider that nothing else you use would have touched.
+    /// </remarks>
+    public string? Warning { get; init; }
+
     public static PlaybackSnapshot Empty { get; } =
         new(PlaybackPhase.Idle, null, TimeSpan.Zero, TimeSpan.Zero, 0f, null, null);
 
-    public bool IsAudible => Phase == PlaybackPhase.Playing && Gain > 0.001f;
+    public bool IsAudible => Phase == PlaybackPhase.Playing && Gain > 0.001f && Warning is null;
 }
