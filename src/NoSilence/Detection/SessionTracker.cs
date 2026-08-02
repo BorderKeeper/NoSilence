@@ -60,7 +60,7 @@ internal sealed class SessionTracker
         }
 
         int window = WindowSamples(rule.MinDurationMs, config.PollIntervalMs);
-        stats.Push(above, window);
+        stats.Push(above, db, window);
 
         bool noisy = rule.Mode == RuleMode.AlwaysTrigger
             ? above
@@ -79,6 +79,7 @@ internal sealed class SessionTracker
         }
 
         stats.SustainedMs = stats.NoisySince is { } since ? (int)(at - since).TotalMilliseconds : 0;
+        stats.WindowPeakDb = stats.MaxDb(window);
         return stats;
     }
 
@@ -131,7 +132,11 @@ internal sealed class SessionTracker
 /// <summary>Rolling state for one audio session.</summary>
 internal sealed class SessionStats
 {
+    private const int HistoryLength = 32;
+
     private uint _history;
+    private readonly float[] _levels = new float[HistoryLength];
+    private int _cursor;
 
     /// <summary>Most recent level in dBFS.</summary>
     public double LastDb { get; internal set; } = PeakMath.MinDbfs;
@@ -153,10 +158,38 @@ internal sealed class SessionStats
     /// <summary>How long it has been consistently noisy. Zero when it is not.</summary>
     public int SustainedMs { get; internal set; }
 
-    internal void Push(bool above, int window)
+    /// <summary>
+    /// Loudest level across the trailing window.
+    /// </summary>
+    /// <remarks>
+    /// This, not <see cref="LastDb"/>, is the honest answer to "how loud was the thing that
+    /// silenced the music". The duty-cycle test can be satisfied by the earlier part of the
+    /// window while the newest sample is already silent — which is how a trigger came to be
+    /// reported as "-100.0 dBFS for 1.2 s", a statement that reads as a bug even though the
+    /// decision was right.
+    /// </remarks>
+    public double WindowPeakDb { get; internal set; } = PeakMath.MinDbfs;
+
+    internal void Push(bool above, double db, int window)
     {
         _history = (_history << 1) | (above ? 1u : 0u);
+        _levels[_cursor] = (float)db;
+        _cursor = (_cursor + 1) % HistoryLength;
         SamplesSeen = Math.Min(SamplesSeen + 1, window);
+    }
+
+    /// <summary>Loudest level among the last <paramref name="window"/> samples.</summary>
+    public double MaxDb(int window)
+    {
+        int count = Math.Clamp(Math.Min(window, SamplesSeen), 1, HistoryLength);
+        double max = PeakMath.MinDbfs;
+
+        for (int i = 1; i <= count; i++)
+        {
+            max = Math.Max(max, _levels[(_cursor - i + HistoryLength) % HistoryLength]);
+        }
+
+        return max;
     }
 
     /// <summary>Fraction of the trailing <paramref name="window"/> samples that were above threshold.</summary>

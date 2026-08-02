@@ -19,17 +19,23 @@ internal sealed class DiagnosticRunner
     private readonly DetectionService _detection;
     private readonly SettingsService _settings;
     private readonly AudioEngineThread _engine;
+    private readonly Playback.MusicLibrary _library;
+    private readonly Playback.PlaybackEngine _playback;
     private readonly ILogger<DiagnosticRunner> _log;
 
     public DiagnosticRunner(
         DetectionService detection,
         SettingsService settings,
         AudioEngineThread engine,
+        Playback.MusicLibrary library,
+        Playback.PlaybackEngine playback,
         ILogger<DiagnosticRunner> log)
     {
         _detection = detection;
         _settings = settings;
         _engine = engine;
+        _library = library;
+        _playback = playback;
         _log = log;
     }
 
@@ -46,6 +52,16 @@ internal sealed class DiagnosticRunner
         if (recorder is not null)
         {
             Console.WriteLine($"recording to {recorder.Path_}");
+
+            if (recorder.PreservedPreviousAs is { } preserved)
+            {
+                Console.WriteLine($"kept the previous recording as {preserved}");
+            }
+        }
+
+        if (options.PlayWhileDiagnosing)
+        {
+            Console.WriteLine("playing music as well, so you can hear the decisions being made");
         }
 
         Console.WriteLine("Press Ctrl+C to stop.");
@@ -59,6 +75,14 @@ internal sealed class DiagnosticRunner
         };
 
         _engine.Start();
+
+        if (options.PlayWhileDiagnosing)
+        {
+            _library.Configure(settings.Library);
+            _playback.Start();
+            _engine.Tick += _playback.Poll;
+            _playback.Configure(settings);
+        }
 
         DateTimeOffset started = DateTimeOffset.Now;
         var state = new DecisionState();
@@ -80,9 +104,23 @@ internal sealed class DiagnosticRunner
             });
 
             recorder?.Write(snapshot);
-            Render(snapshot, outcome, config, ++ticks);
+            ticks++;
+
+            if (options.PlayWhileDiagnosing)
+            {
+                _playback.ApplyDecision(outcome);
+            }
+
+            Render(snapshot, outcome);
 
             stop.Wait(config.PollIntervalMs);
+        }
+
+        if (options.PlayWhileDiagnosing)
+        {
+            _engine.Tick -= _playback.Poll;
+            _playback.Dispose();
+            _library.Dispose();
         }
 
         Console.WriteLine();
@@ -98,10 +136,34 @@ internal sealed class DiagnosticRunner
         return 0;
     }
 
-    private static void Render(DetectionSnapshot snapshot, DecisionOutcome outcome, DetectionConfig config, int tick)
+    private string _lastSignature = string.Empty;
+    private DateTimeOffset _lastAppendAt;
+
+    private void Render(DetectionSnapshot snapshot, DecisionOutcome outcome)
     {
         // Redraw in place when we own the console; fall back to appending when redirected.
         bool canRedraw = !Console.IsOutputRedirected;
+
+        if (!canRedraw)
+        {
+            // Piped or redirected: reprinting the whole table four times a second would be
+            // 1,200 frames over a five-minute run. Print only when something actually
+            // changed, with a slow heartbeat so the file still shows it was alive.
+            string signature = outcome.WantsSilence + "|" + outcome.Reason + "|" +
+                string.Join(",", outcome.Contributions.Where(c => c.Counts).Select(c => c.Source));
+
+            bool changed = !string.Equals(signature, _lastSignature, StringComparison.Ordinal);
+            bool heartbeat = snapshot.At - _lastAppendAt >= TimeSpan.FromSeconds(10);
+
+            if (!changed && !heartbeat)
+            {
+                return;
+            }
+
+            _lastSignature = signature;
+            _lastAppendAt = snapshot.At;
+        }
+
         if (canRedraw)
         {
             try

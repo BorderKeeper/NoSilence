@@ -75,6 +75,16 @@ internal sealed record ProcessRule(
         new("olk.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
         new("OUTLOOK.EXE", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
 
+        // Console hosts only ever ring the bell — a failed command, a tab-completion dead
+        // end. Observed triggering a duck in testing: the bell is around a second, which was
+        // enough to satisfy the sustain window. Never content, so never counted.
+        new("powershell.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+        new("pwsh.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+        new("cmd.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+        new("conhost.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+        new("OpenConsole.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+        new("WindowsTerminal.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
+
         // Chat: pings are ~1 s, calls are continuous.
         new("discord.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
         new("Teams.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },

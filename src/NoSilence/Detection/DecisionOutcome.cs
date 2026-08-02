@@ -30,7 +30,8 @@ internal sealed record TriggerContribution(
     double? Dbfs = null,
     int SustainedMs = 0,
     string? Rule = null,
-    string? Endpoint = null);
+    string? Endpoint = null,
+    double? PeakDbfs = null);
 
 /// <summary>What the engine decided, and why.</summary>
 internal sealed record DecisionOutcome(

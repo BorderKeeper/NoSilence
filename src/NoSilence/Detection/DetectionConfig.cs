@@ -37,8 +37,16 @@ internal sealed class DetectionConfig
     /// </remarks>
     public double AttackRatio { get; set; } = 0.7d;
 
-    /// <summary>How long a normal source must be consistently noisy before it counts.</summary>
-    public int MinDurationMs { get; set; } = 1200;
+    /// <summary>
+    /// How long a normal source must be consistently noisy before it counts.
+    /// </summary>
+    /// <remarks>
+    /// Two seconds. Started at 1200 ms and was raised after a Windows console bell — about a
+    /// second long — was observed ducking the music in real use. The costs here are heavily
+    /// asymmetric: ducking 0.8 s later than strictly necessary is barely perceptible, while a
+    /// false duck buys 20 seconds of silence over a notification chime.
+    /// </remarks>
+    public int MinDurationMs { get; set; } = 2000;
 
     /// <summary>The longer requirement applied to Tolerant sources such as chat clients.</summary>
     public int TolerantMinDurationMs { get; set; } = 4000;

@@ -18,9 +18,54 @@ internal sealed class SnapshotRecorder : IDisposable
 
     public SnapshotRecorder(string path)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        _writer = new StreamWriter(path, append: false) { AutoFlush = false };
-        Path_ = Path.GetFullPath(path);
+        string full = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+
+        PreservedPreviousAs = PreserveExisting(full);
+
+        _writer = new StreamWriter(full, append: false) { AutoFlush = false };
+        Path_ = full;
+    }
+
+    /// <summary>Where an existing recording was moved to, if one was in the way.</summary>
+    public string? PreservedPreviousAs { get; }
+
+    /// <summary>
+    /// Moves an existing recording aside rather than truncating it.
+    /// </summary>
+    /// <remarks>
+    /// Recordings are expensive to produce — they need somebody to sit and actually play a
+    /// game or take a call — and re-running the same command is the most natural thing in
+    /// the world. Silently overwriting one has already cost a session's worth of data once.
+    /// </remarks>
+    private static string? PreserveExisting(string path)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length == 0)
+        {
+            return null;
+        }
+
+        string directory = Path.GetDirectoryName(path)!;
+        string name = Path.GetFileNameWithoutExtension(path);
+        string extension = Path.GetExtension(path);
+        string stamp = File.GetLastWriteTime(path).ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+
+        string target = Path.Combine(directory, $"{name}-{stamp}{extension}");
+        for (int i = 2; File.Exists(target); i++)
+        {
+            target = Path.Combine(directory, $"{name}-{stamp}-{i}{extension}");
+        }
+
+        try
+        {
+            File.Move(path, target);
+            return target;
+        }
+        catch (IOException)
+        {
+            // Locked by something else; carry on rather than refusing to record.
+            return null;
+        }
     }
 
     public string Path_ { get; }

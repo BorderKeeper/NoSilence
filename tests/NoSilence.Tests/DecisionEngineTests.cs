@@ -350,6 +350,55 @@ public class DecisionEngineTests
         Assert.False(RunFor(state, config, ref clock, 2500, Session("vlc.exe", -100)).WantsSilence);
     }
 
+    /// <summary>
+    /// Regression: a trigger was reported at "-100.0 dBFS", because the duty-cycle window
+    /// can be satisfied by the earlier part of the window while the newest sample is already
+    /// silent. The level shown must be the one that caused the trigger.
+    /// </summary>
+    [Fact]
+    public void TheReportedLevelIsThePeakThatTriggered_NotTheLatestSample()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // Browsers carry a 2500 ms rule, so this has to run past that to qualify at all.
+        RunFor(state, config, ref clock, 3000, Session("chrome.exe", -12));
+
+        // One silent tick: the window still qualifies, but the newest sample is silence.
+        DecisionOutcome outcome = RunFor(state, config, ref clock, 250, Session("chrome.exe", -100));
+
+        Assert.True(outcome.WantsSilence);
+        Assert.DoesNotContain("-100", outcome.Reason, StringComparison.Ordinal);
+        Assert.Contains("-12", outcome.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A Windows console bell runs about a second. Observed ducking the music at the old
+    /// 1200 ms default, so the shipped default has to sit above it.
+    /// </summary>
+    [Fact]
+    public void DefaultSustain_IsLongEnoughToRejectASecondLongChime()
+    {
+        Assert.True(new DetectionConfig().MinDurationMs >= 2000);
+    }
+
+    [Fact]
+    public void ConsoleHosts_NeverCount()
+    {
+        var config = Config();
+        DateTimeOffset clock = Start;
+
+        foreach (string shell in new[] { "powershell.exe", "pwsh.exe", "cmd.exe", "WindowsTerminal.exe", "conhost.exe" })
+        {
+            var state = new DecisionState();
+            clock = Start;
+            Assert.False(
+                RunFor(state, config, ref clock, 30000, Session(shell, -10)).WantsSilence,
+                $"{shell} should never silence the music");
+        }
+    }
+
     [Fact]
     public void FullscreenSignal_CountsOnlyWhenEnabled()
     {

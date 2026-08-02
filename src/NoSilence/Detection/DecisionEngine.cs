@@ -143,13 +143,14 @@ internal static class DecisionEngine
             contributions.Add(new TriggerContribution(
                 session.Describe(),
                 counts
-                    ? $"{stats.LastDb:F1} dBFS for {stats.SustainedMs / 1000d:F1} s"
+                    ? $"peaked at {stats.WindowPeakDb:F1} dBFS over {stats.SustainedMs / 1000d:F1} s"
                     : $"{stats.LastDb:F1} dBFS",
                 counts,
                 stats.LastDb,
                 stats.SustainedMs,
                 rule.Source,
-                session.EndpointName));
+                session.EndpointName,
+                stats.WindowPeakDb));
         }
 
         return triggered;
@@ -186,12 +187,13 @@ internal static class DecisionEngine
 
             contributions.Add(new TriggerContribution(
                 $"{session.Describe()} (microphone)",
-                counts ? $"in use, {stats.LastDb:F1} dBFS" : $"{stats.LastDb:F1} dBFS",
+                counts ? $"in use, peaked at {stats.WindowPeakDb:F1} dBFS" : $"{stats.LastDb:F1} dBFS",
                 counts,
                 stats.LastDb,
                 stats.SustainedMs,
                 "microphone",
-                session.EndpointName));
+                session.EndpointName,
+                stats.WindowPeakDb));
         }
 
         return triggered;
@@ -260,9 +262,12 @@ internal static class DecisionEngine
         state.SilenceSince ??= snapshot.At;
         EnterPhase(state, DecisionPhase.Ducked, snapshot.At);
 
+        // Ranked by the level that caused the trigger, not by whatever the newest sample
+        // happens to read — otherwise the source named as the culprit can be one that has
+        // already gone quiet.
         TriggerContribution? loudest = contributions
             .Where(c => c.Counts)
-            .OrderByDescending(c => c.Dbfs ?? double.MinValue)
+            .OrderByDescending(c => c.PeakDbfs ?? c.Dbfs ?? double.MinValue)
             .FirstOrDefault();
 
         string reason = loudest is null
