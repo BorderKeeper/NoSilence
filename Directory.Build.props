@@ -1,0 +1,23 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- CA1416: the whole app is Windows-only by design; the TFM already says so. -->
+    <WarningsNotAsErrors>CA1416</WarningsNotAsErrors>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Version Condition="'$(Version)' == ''">0.0.1</Version>
+    <Authors>ledrj</Authors>
+    <Company>ledrj</Company>
+    <Product>NoSilence</Product>
+    <Copyright>Copyright © 2026 Jan Lédr</Copyright>
+    <RepositoryUrl>https://github.com/ledrj/NoSilence</RepositoryUrl>
+  </PropertyGroup>
+
+</Project>

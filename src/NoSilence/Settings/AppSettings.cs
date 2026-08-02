@@ -1,0 +1,87 @@
+namespace NoSilence.Settings;
+
+/// <summary>
+/// Everything the user can configure, serialised to <c>settings.json</c>.
+/// </summary>
+/// <remarks>
+/// Every property carries its default as an initialiser, so a missing or partial file
+/// deserialises into something sane rather than nulls. <see cref="SchemaVersion"/> exists
+/// so the shape can change later without silently discarding a user's configuration.
+/// </remarks>
+internal sealed class AppSettings
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+
+    public LibrarySettings Library { get; set; } = new();
+
+    public OutputSettings Output { get; set; } = new();
+
+    public GeneralSettings General { get; set; } = new();
+}
+
+internal sealed class LibrarySettings
+{
+    /// <summary>Folders scanned recursively for music.</summary>
+    public List<string> Folders { get; set; } = [];
+
+    /// <summary>
+    /// Only formats Windows can actually decode without extra codecs. Ogg and Opus are
+    /// deliberately absent: Media Foundation cannot open them, so including them by
+    /// default would fill the skip list with failures on a first run.
+    /// </summary>
+    public List<string> Extensions { get; set; } = [".mp3", ".flac", ".wav", ".m4a", ".aac", ".wma", ".aiff", ".aif"];
+
+    public bool Shuffle { get; set; } = true;
+
+    /// <summary>How many recently played tracks to push towards the back when reshuffling.</summary>
+    public int NoRepeatWindow { get; set; } = 25;
+}
+
+internal sealed class OutputSettings
+{
+    /// <summary>
+    /// The WASAPI endpoint ID. This is the durable identifier — it survives the TV being
+    /// switched off, which removes the endpoint from Windows entirely.
+    /// </summary>
+    public string? DeviceId { get; set; }
+
+    /// <summary>
+    /// Remembered alongside the ID purely as a fallback: a GPU driver reinstall can mint a
+    /// new endpoint ID for the same physical output.
+    /// </summary>
+    public string? DeviceFriendlyName { get; set; }
+
+    public int VolumePercent { get; set; } = 20;
+
+    /// <summary>Shared-mode WASAPI buffer, in milliseconds. Higher is safer, lower is snappier.</summary>
+    public int LatencyMs { get; set; } = 200;
+
+    /// <summary>
+    /// Off by default and deliberately so: falling back to the default device is how v1
+    /// ended up playing into the device it was also listening to, which oscillates.
+    /// </summary>
+    public bool FallbackToDefaultDevice { get; set; }
+
+    /// <summary>
+    /// Keep feeding silence to the device while ducked instead of releasing it. An open
+    /// WASAPI stream is what stops the TV going to sleep, so leaving this on trades a
+    /// little power for an instant resume.
+    /// </summary>
+    public bool KeepStreamOpenWhileDucked { get; set; } = true;
+}
+
+internal sealed class GeneralSettings
+{
+    public bool RunAtStartup { get; set; }
+
+    public NotificationLevel Notifications { get; set; } = NotificationLevel.ErrorsOnly;
+}
+
+internal enum NotificationLevel
+{
+    Off,
+    ErrorsOnly,
+    All,
+}
