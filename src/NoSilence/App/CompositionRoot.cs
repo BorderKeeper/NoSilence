@@ -49,6 +49,8 @@ internal static class CompositionRoot
         services.AddSingleton<Detection.DetectionService>();
         services.AddSingleton<DiagnosticRunner>();
 
+        services.AddSingleton<AppController>();
+        services.AddSingleton<StartupRegistration>();
         services.AddSingleton<TrayApplicationContext>();
         services.AddSingleton<UiDispatcher>();
         services.AddSingleton<AppHost>();

@@ -55,11 +55,13 @@ internal sealed class DetectionConfig
     /// Continuous quiet required before the music comes back.
     /// </summary>
     /// <remarks>
-    /// 20 seconds, against v1's zero. Long enough to survive an ad break, a scene
-    /// transition, or pausing a video to read something — all of which would otherwise
-    /// bring music up over the top of what you are watching.
+    /// Five seconds, against v1's zero. Started at twenty on the reasoning that it should
+    /// survive an ad break or pausing a video to read something, but twenty seconds of dead
+    /// air is very noticeable in daily use, and five turned out to feel much better. The
+    /// trade-off is real and worth knowing: a mid-video pause longer than five seconds now
+    /// brings the music back over the top of what you are watching. Raise it if that bites.
     /// </remarks>
-    public int ReleaseMs { get; set; } = 20000;
+    public int ReleaseMs { get; set; } = 5000;
 
     /// <summary>Fade down. Fast enough to feel immediate, slow enough not to click.</summary>
     public int DuckFadeOutMs { get; set; } = 400;

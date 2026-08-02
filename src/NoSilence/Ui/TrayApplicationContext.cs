@@ -2,33 +2,50 @@ using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using NoSilence.App;
+using NoSilence.Audio;
+using NoSilence.Detection;
+using NoSilence.Playback;
+using NoSilence.Settings;
 
 namespace NoSilence.Ui;
 
 /// <summary>
 /// Owns the tray icon and is the app's lifetime: <c>Application.Run</c> returns when this
-/// context ends, so shutting down means calling <see cref="ExitThread"/>.
+/// context ends, so shutting down means calling <see cref="ApplicationContext.ExitThread"/>.
 /// </summary>
 /// <remarks>
-/// M0 scope: the icon exists, tracks state, survives an Explorer restart and a DPI change,
-/// and exits cleanly. Transport, mode/snooze, device selection and the settings window
-/// arrive in M4/M5.
+/// A view over <see cref="AppController"/>. It renders state and calls methods; no settings
+/// writing or engine poking happens in a click handler.
 /// </remarks>
 internal sealed class TrayApplicationContext : ApplicationContext
 {
+    private readonly AppController _app;
     private readonly ILogger<TrayApplicationContext> _log;
     private readonly TrayIcons _icons = new();
     private readonly NotifyIcon _notifyIcon;
     private readonly MessageWindow _messageWindow = new();
     private readonly ContextMenuStrip _menu = new();
+    private readonly VolumeSliderHost _volume = new();
+
+    private ToolStripMenuItem _header = null!;
+    private ToolStripMenuItem _reason = null!;
+    private ToolStripMenuItem _modeMenu = null!;
+    private ToolStripMenuItem _snoozeMenu = null!;
+    private ToolStripMenuItem _deviceMenu = null!;
+    private ToolStripMenuItem _cancelSnooze = null!;
 
     private TrayIconState _state = TrayIconState.Waiting;
     private string _tooltip = "NoSilence — starting up";
+    private PlaybackSnapshot _snapshot = PlaybackSnapshot.Empty;
+    private DateTimeOffset _lastBalloonAt;
     private bool _shuttingDown;
 
-    public TrayApplicationContext(ILogger<TrayApplicationContext> log)
+    public TrayApplicationContext(AppController app, ILogger<TrayApplicationContext> log)
     {
+        _app = app;
         _log = log;
+
+        BuildMenu();
 
         _notifyIcon = new NotifyIcon
         {
@@ -38,10 +55,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = _menu,
         };
 
-        _notifyIcon.DoubleClick += (_, _) => ShowSettings();
-        _menu.Opening += OnMenuOpening;
+        _notifyIcon.DoubleClick += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        _notifyIcon.MouseUp += OnIconMouseUp;
+        _menu.Opening += (_, _) => RefreshMenu();
 
-        _messageWindow.ShowSettingsRequested += (_, _) => ShowSettings();
+        _messageWindow.ShowSettingsRequested += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         _messageWindow.TaskbarCreated += (_, _) => ReaddIcon();
         _messageWindow.QuitRequested += (_, _) => Shutdown("another process asked us to quit");
         _messageWindow.SessionEnding += (_, _) => Shutdown("Windows is ending the session");
@@ -49,24 +67,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
-        BuildMenu();
         _log.LogInformation("Tray icon created.");
     }
 
-    /// <summary>Raised when the user picks Settings. Wired up in M5.</summary>
+    /// <summary>Raised when the user asks for the settings window. Wired up in M5.</summary>
     public event EventHandler? SettingsRequested;
-
-    public event EventHandler? NextRequested;
-
-    public event EventHandler? PreviousRequested;
-
-    public event EventHandler? ReopenDeviceRequested;
 
     public event EventHandler? ExitRequested;
 
+    // ---- state -----------------------------------------------------------
+
     /// <summary>Reflects the current playback state in the icon and tooltip. Call on the UI thread.</summary>
-    public void Apply(Playback.PlaybackSnapshot snapshot)
+    public void Apply(PlaybackSnapshot snapshot)
     {
+        _snapshot = snapshot;
+
         // An inaudible output outranks whatever the phase says: reporting "Playing" while
         // the room is silent is the least helpful thing the tray could do.
         if (snapshot.Warning is { } warning)
@@ -77,12 +92,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         (TrayIconState state, string text) = snapshot.Phase switch
         {
-            Playback.PlaybackPhase.Playing => (TrayIconState.Playing, $"Playing: {snapshot.Track?.DisplayName ?? "…"}"),
-            Playback.PlaybackPhase.Ducked => (TrayIconState.Ducked, snapshot.Detail ?? "Silent — something else is playing"),
-            Playback.PlaybackPhase.Silenced => (TrayIconState.Disabled, snapshot.Detail ?? "Silent"),
-            Playback.PlaybackPhase.NoDevice => (TrayIconState.Waiting, snapshot.Detail ?? "Waiting for the output device"),
-            Playback.PlaybackPhase.Opening => (TrayIconState.Waiting, "Opening the output device…"),
-            Playback.PlaybackPhase.Faulted => (TrayIconState.Error, snapshot.Detail ?? "Playback failed"),
+            PlaybackPhase.Playing => (TrayIconState.Playing, $"Playing: {snapshot.Track?.DisplayName ?? "…"}"),
+            PlaybackPhase.Ducked => (TrayIconState.Ducked, snapshot.Detail ?? "Silent — something else is playing"),
+            PlaybackPhase.Silenced => (TrayIconState.Disabled, snapshot.Detail ?? "Silent"),
+            PlaybackPhase.NoDevice => (TrayIconState.Waiting, snapshot.Detail ?? "Waiting for the output device"),
+            PlaybackPhase.Opening => (TrayIconState.Waiting, "Opening the output device…"),
+            PlaybackPhase.Faulted => (TrayIconState.Error, snapshot.Detail ?? "Playback failed"),
             _ => (TrayIconState.Disabled, snapshot.Detail ?? "Nothing to play"),
         };
 
@@ -96,6 +111,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        TrayIconState previous = _state;
         _state = state;
         _tooltip = tooltip;
 
@@ -106,71 +122,224 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _notifyIcon.Icon = _icons.Get(state);
         _notifyIcon.Text = Truncate(tooltip);
+
+        NotifyIfWorthIt(previous, state, tooltip);
     }
+
+    // ---- menu ------------------------------------------------------------
 
     private void BuildMenu()
     {
-        _menu.Items.Clear();
+        _header = new ToolStripMenuItem("NoSilence") { Enabled = false };
+        _reason = new ToolStripMenuItem(string.Empty) { Enabled = false, Available = false };
 
-        var header = new ToolStripMenuItem("NoSilence") { Enabled = false };
-        _menu.Items.Add(header);
+        _menu.Items.Add(_header);
+        _menu.Items.Add(_reason);
         _menu.Items.Add(new ToolStripSeparator());
 
-        var next = new ToolStripMenuItem("Next track");
-        next.Click += (_, _) => NextRequested?.Invoke(this, EventArgs.Empty);
-        _menu.Items.Add(next);
+        _menu.Items.Add(Item("Next track", () => _app.NextTrack()));
+        _menu.Items.Add(Item("Previous track", () => _app.PreviousTrack()));
 
-        var previous = new ToolStripMenuItem("Previous track");
-        previous.Click += (_, _) => PreviousRequested?.Invoke(this, EventArgs.Empty);
-        _menu.Items.Add(previous);
-
-        var reopen = new ToolStripMenuItem("Reconnect output device");
-        reopen.Click += (_, _) => ReopenDeviceRequested?.Invoke(this, EventArgs.Empty);
-        _menu.Items.Add(reopen);
-
-        _menu.Items.Add(new ToolStripSeparator());
-
-        var settings = new ToolStripMenuItem("Settings…");
-        settings.Click += (_, _) => ShowSettings();
-        _menu.Items.Add(settings);
-
-        var logs = new ToolStripMenuItem("Open log folder");
-        logs.Click += (_, _) => OpenLogFolder();
-        _menu.Items.Add(logs);
+        var volumeMenu = new ToolStripMenuItem("Volume");
+        volumeMenu.DropDownItems.Add(_volume);
+        _volume.VolumeChanged += (_, percent) =>
+        {
+            _app.SetVolume(percent);
+            volumeMenu.Text = $"Volume  ({percent}%)";
+        };
+        _menu.Items.Add(volumeMenu);
 
         _menu.Items.Add(new ToolStripSeparator());
 
-        var exit = new ToolStripMenuItem("Exit");
-        exit.Click += (_, _) => Shutdown("user chose Exit");
-        _menu.Items.Add(exit);
+        _modeMenu = new ToolStripMenuItem("Mode");
+        _modeMenu.DropDownItems.Add(ModeItem("Automatic", OperatingMode.Auto));
+        _modeMenu.DropDownItems.Add(ModeItem("Always play", OperatingMode.AlwaysPlay));
+        _modeMenu.DropDownItems.Add(ModeItem("Always silent", OperatingMode.AlwaysSilent));
+        _menu.Items.Add(_modeMenu);
+
+        _snoozeMenu = new ToolStripMenuItem("Snooze");
+        _snoozeMenu.DropDownItems.Add(Item("15 minutes", () => _app.Snooze(TimeSpan.FromMinutes(15))));
+        _snoozeMenu.DropDownItems.Add(Item("30 minutes", () => _app.Snooze(TimeSpan.FromMinutes(30))));
+        _snoozeMenu.DropDownItems.Add(Item("1 hour", () => _app.Snooze(TimeSpan.FromHours(1))));
+        _snoozeMenu.DropDownItems.Add(Item("2 hours", () => _app.Snooze(TimeSpan.FromHours(2))));
+        _snoozeMenu.DropDownItems.Add(Item("Until I turn it back on", () => _app.SnoozeIndefinitely()));
+        _snoozeMenu.DropDownItems.Add(new ToolStripSeparator());
+        _cancelSnooze = Item("Cancel snooze", () => _app.CancelSnooze());
+        _snoozeMenu.DropDownItems.Add(_cancelSnooze);
+        _menu.Items.Add(_snoozeMenu);
+
+        _menu.Items.Add(new ToolStripSeparator());
+
+        _deviceMenu = new ToolStripMenuItem("Output device");
+        _menu.Items.Add(_deviceMenu);
+
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(Item("Why is it silent?…", ExplainCurrentDecision));
+        _menu.Items.Add(Item("Settings…", () => SettingsRequested?.Invoke(this, EventArgs.Empty)));
+        _menu.Items.Add(Item("Open log folder", () => _app.OpenLogFolder()));
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(Item("Exit", () => Shutdown("user chose Exit")));
     }
 
-    private void OnMenuOpening(object? sender, System.ComponentModel.CancelEventArgs e)
+    private void RefreshMenu()
     {
-        if (_menu.Items.Count > 0)
+        _header.Text = _tooltip.StartsWith("NoSilence — ", StringComparison.Ordinal)
+            ? _tooltip["NoSilence — ".Length..]
+            : _tooltip;
+
+        // Only show the "why" line when there is something to explain.
+        DecisionOutcome? decision = _app.LastDecision;
+        bool explainable = decision is { WantsSilence: true } && _snapshot.Phase is PlaybackPhase.Ducked or PlaybackPhase.Silenced;
+        _reason.Available = explainable;
+        if (explainable)
         {
-            _menu.Items[0].Text = _tooltip;
+            _reason.Text = "    " + decision!.Reason;
         }
-    }
 
-    private void OpenLogFolder()
-    {
-        try
+        _volume.SetValueQuietly(_app.Settings.Output.VolumePercent);
+
+        OverrideState state = _app.Override;
+        foreach (ToolStripItem item in _modeMenu.DropDownItems)
         {
-            AppPaths paths = AppPaths.Resolve();
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            if (item is ToolStripMenuItem mode && mode.Tag is OperatingMode value)
             {
-                FileName = paths.LogDirectory,
-                UseShellExecute = true,
-            });
+                mode.Checked = state.Mode == value && !state.IsSnoozed(DateTimeOffset.Now);
+            }
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Could not open the log folder.");
-        }
+
+        bool snoozed = state.IsSnoozed(DateTimeOffset.Now);
+        _cancelSnooze.Enabled = snoozed;
+        _snoozeMenu.Text = snoozed
+            ? $"Snooze  (until {state.SnoozeUntil!.Value.LocalDateTime:HH:mm})"
+            : "Snooze";
+
+        RefreshDeviceMenu();
     }
 
-    private void ShowSettings() => SettingsRequested?.Invoke(this, EventArgs.Empty);
+    private void RefreshDeviceMenu()
+    {
+        _deviceMenu.DropDownItems.Clear();
+
+        string? selectedId = _app.Settings.Output.DeviceId;
+        IReadOnlyList<AudioEndpointInfo> devices = _app.ListOutputDevices();
+
+        foreach (AudioEndpointInfo device in devices)
+        {
+            // Configured-but-absent devices stay listed and greyed rather than vanishing,
+            // so "why is nothing playing" has a visible answer.
+            var item = new ToolStripMenuItem(device.IsActive ? device.FriendlyName : $"{device.FriendlyName}  (not connected)")
+            {
+                Checked = string.Equals(device.Id, selectedId, StringComparison.Ordinal),
+                Tag = device,
+            };
+
+            AudioEndpointInfo captured = device;
+            item.Click += (_, _) => _app.SelectOutputDevice(captured);
+            _deviceMenu.DropDownItems.Add(item);
+        }
+
+        if (devices.Count == 0)
+        {
+            _deviceMenu.DropDownItems.Add(new ToolStripMenuItem("(no output devices found)") { Enabled = false });
+        }
+
+        _deviceMenu.DropDownItems.Add(new ToolStripSeparator());
+        _deviceMenu.DropDownItems.Add(Item("Reconnect now", () => _app.ReopenDevice()));
+    }
+
+    private ToolStripMenuItem ModeItem(string text, OperatingMode mode)
+    {
+        var item = new ToolStripMenuItem(text) { Tag = mode, CheckOnClick = false };
+        item.Click += (_, _) => _app.SetMode(mode);
+        return item;
+    }
+
+    private static ToolStripMenuItem Item(string text, Action action)
+    {
+        var item = new ToolStripMenuItem(text);
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    /// <summary>Middle-click toggles between automatic and silent — the one shortcut worth having.</summary>
+    private void OnIconMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Middle)
+        {
+            return;
+        }
+
+        _app.SetMode(_app.Override.Mode == OperatingMode.AlwaysSilent ? OperatingMode.Auto : OperatingMode.AlwaysSilent);
+    }
+
+    private void ExplainCurrentDecision()
+    {
+        DecisionOutcome? decision = _app.LastDecision;
+
+        string message = decision is null
+            ? "Nothing has been decided yet."
+            : decision.WantsSilence
+                ? decision.Reason
+                : $"Nothing is silencing the music.\n\n{decision.Reason}";
+
+        if (decision is { WantsSilence: true })
+        {
+            IEnumerable<string> counting = decision.Contributions
+                .Where(c => c.Counts)
+                .Select(c => $"• {c.Source}: {c.Detail}");
+
+            string detail = string.Join("\n", counting);
+            if (!string.IsNullOrEmpty(detail))
+            {
+                message = detail;
+            }
+        }
+
+        ShowBalloon("Why NoSilence is silent", message, ToolTipIcon.Info, force: true);
+    }
+
+    // ---- notifications ---------------------------------------------------
+
+    /// <summary>
+    /// Deliberately restrained: this is an app whose whole premise is not bothering you, so
+    /// routine ducking never produces a balloon.
+    /// </summary>
+    private void NotifyIfWorthIt(TrayIconState previous, TrayIconState current, string tooltip)
+    {
+        NotificationLevel level = _app.Settings.General.Notifications;
+        if (level == NotificationLevel.Off || previous == current)
+        {
+            return;
+        }
+
+        bool isProblem = current is TrayIconState.Error or TrayIconState.Waiting;
+        if (!isProblem && level != NotificationLevel.All)
+        {
+            return;
+        }
+
+        ShowBalloon("NoSilence", tooltip.Replace("NoSilence — ", string.Empty, StringComparison.Ordinal),
+            isProblem ? ToolTipIcon.Warning : ToolTipIcon.Info);
+    }
+
+    private void ShowBalloon(string title, string message, ToolTipIcon icon, bool force = false)
+    {
+        if (_shuttingDown)
+        {
+            return;
+        }
+
+        // Rate limit, or a device flapping would produce a stream of popups.
+        if (!force && DateTimeOffset.Now - _lastBalloonAt < TimeSpan.FromSeconds(10))
+        {
+            return;
+        }
+
+        _lastBalloonAt = DateTimeOffset.Now;
+        _notifyIcon.ShowBalloonTip(5000, title, message, icon);
+    }
+
+    // ---- lifetime --------------------------------------------------------
 
     /// <summary>
     /// Explorer crashed and restarted, taking every tray icon with it. Toggling Visible
@@ -186,7 +355,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _notifyIcon.Visible = true;
             _log.LogInformation("Explorer restarted; tray icon re-added.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
         {
             _log.LogWarning(ex, "Failed to re-add the tray icon after Explorer restarted.");
         }

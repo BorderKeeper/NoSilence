@@ -173,6 +173,11 @@ internal sealed class PlaybackEngine : IDisposable
     /// <summary>Sets the ducking gain. 1 is full volume, 0 is silence.</summary>
     public void SetGain(float gain, int fadeMs) => _ducking.SetTarget(gain, fadeMs);
 
+    /// <summary>User volume, 0-100. Applied immediately; safe from any thread.</summary>
+    public void SetVolume(int percent) => _volume.Volume = Math.Clamp(percent / 100f, 0f, 1f);
+
+    public int VolumePercent => (int)Math.Round(_volume.Volume * 100f);
+
     /// <summary>
     /// Applies a decision from the detection engine: the gain, the fade, and the
     /// human-readable reason the tray shows.
@@ -187,6 +192,55 @@ internal sealed class PlaybackEngine : IDisposable
     public void Next() => _playlist.Next();
 
     public void Previous() => _playlist.Previous();
+
+    /// <summary>
+    /// Plays two seconds of pink noise to a device, without disturbing normal playback.
+    /// </summary>
+    /// <remarks>
+    /// Invaluable when the target is a television: if you cannot hear anything, the question
+    /// is always "is the TV on the right input, is that endpoint muted, or is the app
+    /// broken?" — and this answers it in two seconds.
+    /// </remarks>
+    public void PlayTestTone(string endpointId, int volumePercent) => _engine.Post(() =>
+    {
+        MMDevice? device = _catalog.TryGet(endpointId);
+        if (device is null)
+        {
+            _log.LogWarning("Cannot play a test tone: endpoint {Id} is not available.", endpointId);
+            return;
+        }
+
+        WasapiOut? output = null;
+        try
+        {
+            var noise = new SignalGenerator(44100, 2)
+            {
+                Type = SignalGeneratorType.Pink,
+                Gain = Math.Clamp(volumePercent / 100d, 0d, 1d),
+            };
+
+            output = new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, 200);
+            output.Init(noise.Take(TimeSpan.FromSeconds(2)));
+
+            // Dispose from the stop callback rather than blocking the engine thread for two
+            // seconds, which would stall detection and the device state machine.
+            WasapiOut captured = output;
+            captured.PlaybackStopped += (_, _) => _engine.Post(() =>
+            {
+                captured.Dispose();
+                device.Dispose();
+            });
+
+            output.Play();
+            _log.LogInformation("Playing a test tone on {Device}.", endpointId);
+        }
+        catch (Exception ex) when (ex is COMException or InvalidOperationException or ArgumentException)
+        {
+            _log.LogError(ex, "Could not play a test tone.");
+            output?.Dispose();
+            device.Dispose();
+        }
+    });
 
     /// <summary>Forces an immediate reconnect attempt. The tray's "Reconnect output device".</summary>
     public void ReopenDevice() => _engine.Post(() =>

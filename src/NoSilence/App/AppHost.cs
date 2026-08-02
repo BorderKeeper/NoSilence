@@ -23,8 +23,11 @@ internal sealed class AppHost : IDisposable
     private readonly Detection.DetectionService _detection;
     private readonly TrayApplicationContext _tray;
     private readonly UiDispatcher _ui;
+    private readonly AppController _controller;
+    private readonly StartupRegistration _startup;
     private readonly ILogger<AppHost> _log;
 
+    private SettingsForm? _settingsForm;
     private bool _disposed;
 
     public AppHost(
@@ -35,8 +38,12 @@ internal sealed class AppHost : IDisposable
         Detection.DetectionService detection,
         TrayApplicationContext tray,
         UiDispatcher ui,
+        AppController controller,
+        StartupRegistration startup,
         ILogger<AppHost> log)
     {
+        _controller = controller;
+        _startup = startup;
         _settings = settings;
         _library = library;
         _engine = engine;
@@ -77,11 +84,31 @@ internal sealed class AppHost : IDisposable
         _playback.OutputDeviceLost += (_, _) => _detection.InvalidateSessions();
 
         _tray.ExitRequested += (_, _) => _log.LogInformation("Exit requested from the tray.");
-        _tray.NextRequested += (_, _) => _playback.Next();
-        _tray.PreviousRequested += (_, _) => _playback.Previous();
-        _tray.ReopenDeviceRequested += (_, _) => _playback.ReopenDevice();
+        _tray.SettingsRequested += (_, _) => ShowSettings();
+
+        _startup.RepairIfStale();
 
         _log.LogInformation("NoSilence started.");
+    }
+
+    /// <summary>
+    /// Shows the settings window, creating it on first use. It is kept alive and hidden
+    /// afterwards, so reopening is instant.
+    /// </summary>
+    public void ShowSettings()
+    {
+        _settingsForm ??= new SettingsForm(_controller, _startup);
+
+        _settingsForm.ReloadFromSettings();
+        _settingsForm.Show();
+
+        if (_settingsForm.WindowState == System.Windows.Forms.FormWindowState.Minimized)
+        {
+            _settingsForm.WindowState = System.Windows.Forms.FormWindowState.Normal;
+        }
+
+        _settingsForm.BringToFront();
+        _settingsForm.Activate();
     }
 
     private void OnPlaybackStateChanged(object? sender, PlaybackSnapshot snapshot)
@@ -112,6 +139,8 @@ internal sealed class AppHost : IDisposable
         _detection.Decided -= OnDecided;
         _engine.Tick -= _playback.Poll;
         _engine.Tick -= _detection.Tick;
+
+        _settingsForm?.Dispose();
 
         // Release the device before stopping the thread that owns it.
         _playback.Dispose();

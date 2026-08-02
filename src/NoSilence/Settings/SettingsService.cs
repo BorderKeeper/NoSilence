@@ -94,7 +94,7 @@ internal sealed class SettingsService
 
             try
             {
-                File.WriteAllText(temp, JsonSerializer.Serialize(settings, JsonOptions.Default));
+                File.WriteAllText(temp, Serialize(settings));
 
                 if (File.Exists(target))
                 {
@@ -114,6 +114,23 @@ internal sealed class SettingsService
                 TryDelete(temp);
             }
         }
+    }
+
+    /// <summary>
+    /// Serialises only the values that differ from the defaults, so improvements to a
+    /// default reach existing configurations instead of being pinned by a file that
+    /// recorded every property the first time the app exited.
+    /// </summary>
+    internal static string Serialize(AppSettings settings)
+    {
+        System.Text.Json.Nodes.JsonNode? full = System.Text.Json.Nodes.JsonNode.Parse(
+            JsonSerializer.Serialize(settings, JsonOptions.Default));
+
+        System.Text.Json.Nodes.JsonNode? defaults = System.Text.Json.Nodes.JsonNode.Parse(
+            JsonSerializer.Serialize(new AppSettings(), JsonOptions.Default));
+
+        System.Text.Json.Nodes.JsonNode? sparse = SparseJson.Strip(full, defaults);
+        return sparse?.ToJsonString(JsonOptions.Default) ?? "{}";
     }
 
     private bool TryRead(string path, out AppSettings? settings, out string? error)

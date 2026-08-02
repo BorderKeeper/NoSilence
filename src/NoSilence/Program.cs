@@ -115,7 +115,7 @@ internal static class Program
 
         if (options.ShowSettings)
         {
-            // M5 opens the settings window here.
+            host.ShowSettings();
         }
 
         Application.Run(tray);
