@@ -1,0 +1,365 @@
+using NoSilence.Detection;
+
+namespace NoSilence.Tests;
+
+/// <summary>
+/// The engine takes its time from the snapshot, never from a clock, so these tests advance
+/// a fake clock tick by tick and assert on exact millisecond boundaries.
+/// </summary>
+public class DecisionEngineTests
+{
+    private static readonly DateTimeOffset Start = new(2026, 8, 2, 12, 0, 0, TimeSpan.Zero);
+
+    private static DetectionConfig Config() => new()
+    {
+        PollIntervalMs = 250,
+        ThresholdDb = -50,
+        AttackRatio = 0.7,
+        MinDurationMs = 1200,
+        ReleaseMs = 20000,
+        HardDuckGraceMs = 500,
+        MicrophoneSignal = false,
+        FullscreenSignal = false,
+    };
+
+    private static SessionObservation Session(
+        string exe,
+        double dbfs,
+        uint pid = 4242,
+        bool ours = false,
+        bool systemSounds = false,
+        bool muted = false,
+        float volume = 1f) => new(
+            SessionInstanceId: $"session-{exe}-{pid}",
+            EndpointId: "endpoint-1",
+            EndpointName: "Headphones",
+            ProcessId: pid,
+            ExeName: exe,
+            DisplayName: null,
+            IsSystemSounds: systemSounds,
+            IsOurProcess: ours,
+            State: SessionActivity.Active,
+            Peak: (float)PeakMath.FromDbfs(dbfs),
+            SessionVolume: volume,
+            SessionMuted: muted);
+
+    /// <summary>Drives the engine forward, returning the outcome of the final tick.</summary>
+    private static DecisionOutcome RunFor(
+        DecisionState state,
+        DetectionConfig config,
+        ref DateTimeOffset clock,
+        int milliseconds,
+        params SessionObservation[] sessions)
+    {
+        DecisionOutcome outcome = null!;
+        int ticks = Math.Max(1, milliseconds / config.PollIntervalMs);
+
+        for (int i = 0; i < ticks; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with { Render = sessions };
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        return outcome;
+    }
+
+    [Fact]
+    public void NothingPlaying_MeansPlay()
+    {
+        var state = new DecisionState();
+        DecisionOutcome outcome = DecisionEngine.Evaluate(DetectionSnapshot.Empty(Start), Config(), state);
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Equal(1f, outcome.TargetGain);
+    }
+
+    /// <summary>
+    /// The core promise. v1 blocked for three seconds and then re-read once; this must reach
+    /// the decision purely from the trailing window, without ever blocking.
+    /// </summary>
+    [Fact]
+    public void SustainedAudio_DucksAfterTheConfiguredDelay()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        SessionObservation loud = Session("chrome.exe", -20);
+
+        // 1000 ms is under the 1200 ms sustain requirement.
+        Assert.False(RunFor(state, config, ref clock, 1000, loud).WantsSilence);
+
+        // Carrying on past it must duck.
+        Assert.True(RunFor(state, config, ref clock, 1500, loud).WantsSilence);
+    }
+
+    /// <summary>
+    /// A Discord ping is about a second. This is the single most important false positive to
+    /// avoid, because it is the one that happens all day.
+    /// </summary>
+    [Fact]
+    public void ShortBlip_NeverDucks()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // One second of noise, then quiet. Well under the 1200 ms requirement.
+        Assert.False(RunFor(state, config, ref clock, 1000, Session("chrome.exe", -20)).WantsSilence);
+        Assert.False(RunFor(state, config, ref clock, 3000, Session("chrome.exe", -100)).WantsSilence);
+    }
+
+    [Fact]
+    public void QuietAudioBelowThreshold_DoesNotDuck()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // -60 dBFS is below the -50 threshold: an idle-but-open audio context.
+        Assert.False(RunFor(state, config, ref clock, 10000, Session("chrome.exe", -60)).WantsSilence);
+    }
+
+    /// <summary>
+    /// v1's threshold of 0.0001f is -80 dBFS, so a near-silent stream pinned it permanently.
+    /// </summary>
+    [Fact]
+    public void V1Threshold_WouldHaveTriggered_ButOursDoesNot()
+    {
+        Assert.True(PeakMath.ToDbfs(0.0001f) < -79);
+
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.False(RunFor(state, config, ref clock, 10000, Session("chrome.exe", -75)).WantsSilence);
+    }
+
+    [Fact]
+    public void ReleaseRequiresTheFullQuietWindow()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunFor(state, config, ref clock, 3000, Session("chrome.exe", -20));
+
+        // Ten seconds of quiet is not enough; the release window is twenty.
+        Assert.True(RunFor(state, config, ref clock, 10000, Session("chrome.exe", -100)).WantsSilence);
+
+        // Past twenty, the music comes back.
+        Assert.False(RunFor(state, config, ref clock, 11000, Session("chrome.exe", -100)).WantsSilence);
+    }
+
+    /// <summary>Pausing a video to read something must not bring music up over the top of it.</summary>
+    [Fact]
+    public void PausingAVideoBriefly_DoesNotResumeMusic()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunFor(state, config, ref clock, 3000, Session("chrome.exe", -20));
+        Assert.True(RunFor(state, config, ref clock, 15000, Session("chrome.exe", -100)).WantsSilence);
+        Assert.True(RunFor(state, config, ref clock, 3000, Session("chrome.exe", -20)).WantsSilence);
+    }
+
+    [Fact]
+    public void ASingleNoisyTickResetsTheReleaseCountdown()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunFor(state, config, ref clock, 3000, Session("chrome.exe", -20));
+        RunFor(state, config, ref clock, 18000, Session("chrome.exe", -100));
+
+        // Noise again just before the window closes, then another 15 s of quiet: still silent.
+        RunFor(state, config, ref clock, 2000, Session("chrome.exe", -20));
+        Assert.True(RunFor(state, config, ref clock, 15000, Session("chrome.exe", -100)).WantsSilence);
+    }
+
+    /// <summary>
+    /// The check that removes v1's rule that the music device had to differ from the watched
+    /// device. Without it the app hears itself and oscillates forever.
+    /// </summary>
+    [Fact]
+    public void OurOwnPlayback_NeverCountsHoweverLoud()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        DecisionOutcome outcome = RunFor(state, config, ref clock, 30000, Session("NoSilence.exe", -3, pid: 1234, ours: true));
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Contains(outcome.Contributions, c => c is { Counts: false, Rule: "self" });
+    }
+
+    [Fact]
+    public void SystemSounds_NeverCount()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.False(RunFor(state, config, ref clock, 30000, Session("(system sounds)", -10, pid: 0, systemSounds: true)).WantsSilence);
+    }
+
+    [Fact]
+    public void MutedSession_DoesNotCount()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.False(RunFor(state, config, ref clock, 10000, Session("chrome.exe", -10, muted: true)).WantsSilence);
+    }
+
+    [Fact]
+    public void MutedOutputEndpoint_MeansNothingCounts()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+        DecisionOutcome outcome = null!;
+
+        for (int i = 0; i < 40; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Render = [Session("chrome.exe", -10)],
+                DefaultEndpointMuted = true,
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.False(outcome.WantsSilence);
+    }
+
+    [Fact]
+    public void AlwaysTriggerRule_DucksImmediately()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // vlc.exe is AlwaysTrigger out of the box: you started it deliberately.
+        Assert.True(RunFor(state, config, ref clock, 250, Session("vlc.exe", -20)).WantsSilence);
+    }
+
+    /// <summary>A Discord ping must not duck, but a Discord call must.</summary>
+    [Fact]
+    public void TolerantRule_IgnoresPingsButNotCalls()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.False(RunFor(state, config, ref clock, 2000, Session("discord.exe", -20)).WantsSilence);
+
+        state = new DecisionState();
+        clock = Start;
+        Assert.True(RunFor(state, config, ref clock, 6000, Session("discord.exe", -20)).WantsSilence);
+    }
+
+    [Fact]
+    public void AlwaysSilentMode_OverridesEverything()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        var snapshot = DetectionSnapshot.Empty(Start) with { Override = new OverrideState(OperatingMode.AlwaysSilent) };
+
+        DecisionOutcome outcome = DecisionEngine.Evaluate(snapshot, config, state);
+
+        Assert.True(outcome.WantsSilence);
+        Assert.Equal(DecisionPhase.Overridden, outcome.Phase);
+    }
+
+    [Fact]
+    public void AlwaysPlayMode_OverridesEvenLoudAudio()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+        DecisionOutcome outcome = null!;
+
+        for (int i = 0; i < 40; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Render = [Session("chrome.exe", -5)],
+                Override = new OverrideState(OperatingMode.AlwaysPlay),
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.False(outcome.WantsSilence);
+    }
+
+    /// <summary>Snooze expiry is derived from the snapshot's own clock, so no timer can leak.</summary>
+    [Fact]
+    public void Snooze_ExpiresOnItsOwn()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        var snooze = new OverrideState(OperatingMode.Auto, Start.AddMinutes(15));
+
+        var during = DetectionSnapshot.Empty(Start.AddMinutes(5)) with { Override = snooze };
+        Assert.True(DecisionEngine.Evaluate(during, config, state).WantsSilence);
+
+        var after = DetectionSnapshot.Empty(Start.AddMinutes(16)) with { Override = snooze };
+        Assert.False(DecisionEngine.Evaluate(after, config, state).WantsSilence);
+    }
+
+    [Fact]
+    public void IgnoredSessionsAreStillReported_SoTheHeuristicCanBeDebugged()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        DecisionOutcome outcome = RunFor(state, config, ref clock, 2000, Session("explorer.exe", -10));
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Contains(outcome.Contributions, c => c.Source.Contains("explorer", StringComparison.OrdinalIgnoreCase) && !c.Counts);
+    }
+
+    [Fact]
+    public void HardDuckGrace_PreventsAnImmediateBounceBack()
+    {
+        DetectionConfig config = Config();
+        config.ReleaseMs = 0;      // release instantly, so only the grace period holds it
+        config.HardDuckGraceMs = 2000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // vlc is AlwaysTrigger, so one tick ducks.
+        RunFor(state, config, ref clock, 250, Session("vlc.exe", -20));
+
+        // Still inside the grace period: must not bounce straight back.
+        Assert.True(RunFor(state, config, ref clock, 500, Session("vlc.exe", -100)).WantsSilence);
+
+        // Once the grace has passed and the release window is zero, it resumes.
+        Assert.False(RunFor(state, config, ref clock, 2500, Session("vlc.exe", -100)).WantsSilence);
+    }
+
+    [Fact]
+    public void FullscreenSignal_CountsOnlyWhenEnabled()
+    {
+        var config = Config();
+        var state = new DecisionState();
+        var snapshot = DetectionSnapshot.Empty(Start) with { Shell = ShellActivity.FullScreenD3D };
+
+        Assert.False(DecisionEngine.Evaluate(snapshot, config, state).WantsSilence);
+
+        config.FullscreenSignal = true;
+        Assert.True(DecisionEngine.Evaluate(snapshot, config, new DecisionState()).WantsSilence);
+    }
+}

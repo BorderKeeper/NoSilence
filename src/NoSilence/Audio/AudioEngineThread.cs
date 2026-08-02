@@ -108,7 +108,12 @@ internal sealed class AudioEngineThread : IDisposable
     public T Invoke<T>(Func<T> work)
     {
         T result = default!;
-        Invoke(() => result = work());
+
+        // The braces are load-bearing. Written as `Invoke(() => result = work())` the lambda
+        // is an expression with a value, so it converts to both Action and Func<T> — and
+        // overload resolution picks Func<T>, which is this method, recursing until the stack
+        // overflows. A statement body can only be an Action.
+        Invoke(() => { result = work(); });
         return result;
     }
 

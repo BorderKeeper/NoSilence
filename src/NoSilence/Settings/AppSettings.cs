@@ -18,6 +18,13 @@ internal sealed class AppSettings
 
     public OutputSettings Output { get; set; } = new();
 
+    /// <summary>
+    /// Serialised directly rather than mirrored into a separate settings type. The config is
+    /// already a plain POCO, and a mapping layer would be one more place for a default to
+    /// drift out of step with the value the engine actually uses.
+    /// </summary>
+    public Detection.DetectionConfig Detection { get; set; } = new();
+
     public GeneralSettings General { get; set; } = new();
 }
 

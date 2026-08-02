@@ -20,6 +20,7 @@ internal sealed class AppHost : IDisposable
     private readonly MusicLibrary _library;
     private readonly AudioEngineThread _engine;
     private readonly PlaybackEngine _playback;
+    private readonly Detection.DetectionService _detection;
     private readonly TrayApplicationContext _tray;
     private readonly UiDispatcher _ui;
     private readonly ILogger<AppHost> _log;
@@ -31,6 +32,7 @@ internal sealed class AppHost : IDisposable
         MusicLibrary library,
         AudioEngineThread engine,
         PlaybackEngine playback,
+        Detection.DetectionService detection,
         TrayApplicationContext tray,
         UiDispatcher ui,
         ILogger<AppHost> log)
@@ -39,6 +41,7 @@ internal sealed class AppHost : IDisposable
         _library = library;
         _engine = engine;
         _playback = playback;
+        _detection = detection;
         _tray = tray;
         _ui = ui;
         _log = log;
@@ -64,6 +67,15 @@ internal sealed class AppHost : IDisposable
         _playback.Start();
         _playback.Configure(settings);
 
+        _detection.Configure(settings.Detection);
+        _detection.Decided += OnDecided;
+        _engine.Tick += _detection.Tick;
+
+        // An endpoint appearing or disappearing changes which sessions exist, so the cached
+        // session list has to be rebuilt rather than waiting out the refresh interval.
+        _playback.OutputDeviceAcquired += (_, _) => _detection.InvalidateSessions();
+        _playback.OutputDeviceLost += (_, _) => _detection.InvalidateSessions();
+
         _tray.ExitRequested += (_, _) => _log.LogInformation("Exit requested from the tray.");
         _tray.NextRequested += (_, _) => _playback.Next();
         _tray.PreviousRequested += (_, _) => _playback.Previous();
@@ -77,6 +89,15 @@ internal sealed class AppHost : IDisposable
         _ui.Post(() => _tray.Apply(snapshot));
     }
 
+    /// <summary>
+    /// The whole point of the app, in one line: what the detection engine decided becomes
+    /// the gain on the music.
+    /// </summary>
+    private void OnDecided(object? sender, (Detection.DecisionOutcome Outcome, Detection.DetectionSnapshot Snapshot) e)
+    {
+        _playback.ApplyDecision(e.Outcome);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -88,10 +109,13 @@ internal sealed class AppHost : IDisposable
         _log.LogInformation("Shutting down.");
 
         _playback.StateChanged -= OnPlaybackStateChanged;
+        _detection.Decided -= OnDecided;
         _engine.Tick -= _playback.Poll;
+        _engine.Tick -= _detection.Tick;
 
         // Release the device before stopping the thread that owns it.
         _playback.Dispose();
+        _detection.Dispose();
         _engine.Dispose();
         _library.Dispose();
         _settings.Save();

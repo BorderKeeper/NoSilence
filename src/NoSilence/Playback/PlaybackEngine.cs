@@ -80,6 +80,8 @@ internal sealed class PlaybackEngine : IDisposable
     private string? _deviceName;
     private string? _lastLoggedTrackPath;
     private string? _outputWarning;
+    private string? _decisionReason;
+    private bool _decisionIsOverride;
     private long _nextVolumeCheckAt;
     private bool _disposed;
 
@@ -171,6 +173,17 @@ internal sealed class PlaybackEngine : IDisposable
     /// <summary>Sets the ducking gain. 1 is full volume, 0 is silence.</summary>
     public void SetGain(float gain, int fadeMs) => _ducking.SetTarget(gain, fadeMs);
 
+    /// <summary>
+    /// Applies a decision from the detection engine: the gain, the fade, and the
+    /// human-readable reason the tray shows.
+    /// </summary>
+    public void ApplyDecision(Detection.DecisionOutcome outcome)
+    {
+        _ducking.SetTarget(outcome.TargetGain, outcome.FadeMs);
+        _decisionReason = outcome.WantsSilence ? outcome.Reason : null;
+        _decisionIsOverride = outcome.Phase == Detection.DecisionPhase.Overridden;
+    }
+
     public void Next() => _playlist.Next();
 
     public void Previous() => _playlist.Previous();
@@ -201,14 +214,10 @@ internal sealed class PlaybackEngine : IDisposable
         if (_phase is PlaybackPhase.Playing or PlaybackPhase.Ducked or PlaybackPhase.Silenced)
         {
             PlaybackPhase expected = _ducking.TargetGain <= 0.001f
-                ? (_phase == PlaybackPhase.Silenced ? PlaybackPhase.Silenced : PlaybackPhase.Ducked)
+                ? (_decisionIsOverride ? PlaybackPhase.Silenced : PlaybackPhase.Ducked)
                 : PlaybackPhase.Playing;
 
-            if (expected != _phase)
-            {
-                SetPhase(expected, null);
-                return;
-            }
+            SetPhase(expected, expected == PlaybackPhase.Playing ? null : _decisionReason);
         }
 
         StateChanged?.Invoke(this, Snapshot);

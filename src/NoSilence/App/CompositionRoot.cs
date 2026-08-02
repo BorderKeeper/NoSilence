@@ -43,6 +43,12 @@ internal static class CompositionRoot
         services.AddSingleton<PlaylistSampleProvider>();
         services.AddSingleton<PlaybackEngine>();
 
+        services.AddSingleton<ProcessInfoCache>();
+        services.AddSingleton<AudioSessionProbe>();
+        services.AddSingleton<Signals.SignalProbes>();
+        services.AddSingleton<Detection.DetectionService>();
+        services.AddSingleton<DiagnosticRunner>();
+
         services.AddSingleton<TrayApplicationContext>();
         services.AddSingleton<UiDispatcher>();
         services.AddSingleton<AppHost>();

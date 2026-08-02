@@ -1,0 +1,156 @@
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using NAudio.CoreAudioApi;
+using NoSilence.Audio;
+using NoSilence.Signals;
+
+namespace NoSilence.Detection;
+
+/// <summary>
+/// Assembles a <see cref="DetectionSnapshot"/> each tick and runs it through the pure
+/// <see cref="DecisionEngine"/>.
+/// </summary>
+/// <remarks>
+/// The split matters: everything that touches COM or Win32 lives here, and everything that
+/// makes a judgement lives in the engine. That is what allows a recorded snapshot stream to
+/// be replayed through the same logic offline.
+/// <para>Runs entirely on the audio engine thread.</para>
+/// </remarks>
+internal sealed class DetectionService : IDisposable
+{
+    private readonly AudioSessionProbe _sessions;
+    private readonly DeviceCatalog _catalog;
+    private readonly SignalProbes _signals;
+    private readonly ILogger<DetectionService> _log;
+    private readonly DecisionState _state = new();
+
+    private DetectionConfig _config = new();
+    private OverrideState _override = OverrideState.Auto;
+    private DecisionOutcome? _last;
+    private bool _disposed;
+
+    public DetectionService(
+        AudioSessionProbe sessions,
+        DeviceCatalog catalog,
+        SignalProbes signals,
+        ILogger<DetectionService> log)
+    {
+        _sessions = sessions;
+        _catalog = catalog;
+        _signals = signals;
+        _log = log;
+    }
+
+    /// <summary>Raised on the engine thread every tick, with the decision and what produced it.</summary>
+    public event EventHandler<(DecisionOutcome Outcome, DetectionSnapshot Snapshot)>? Decided;
+
+    /// <summary>The most recent decision, for the tray and the settings window.</summary>
+    public DecisionOutcome? LastOutcome => _last;
+
+    public DetectionConfig Config => _config;
+
+    public void Configure(DetectionConfig config)
+    {
+        _config = config;
+        _state.Reset();
+    }
+
+    public OverrideState Override
+    {
+        get => _override;
+        set
+        {
+            _override = value;
+            _log.LogInformation("Operating mode is now {Mode}{Snooze}.", value.Mode,
+                value.SnoozeUntil is { } until ? $" (snoozed until {until.LocalDateTime:HH:mm})" : string.Empty);
+        }
+    }
+
+    /// <summary>Forces the session list to be rebuilt on the next tick.</summary>
+    public void InvalidateSessions() => _sessions.Invalidate();
+
+    public void Tick()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        DetectionSnapshot snapshot = Capture();
+        DecisionOutcome outcome = DecisionEngine.Evaluate(snapshot, _config, _state);
+
+        if (_last is null || _last.WantsSilence != outcome.WantsSilence || _last.Phase != outcome.Phase)
+        {
+            _log.LogInformation("{Summary}", DecisionEngine.Summarise(outcome));
+
+            if (_state.TransitionsThisHour == 20)
+            {
+                // Automatic flap detection, so oscillation surfaces without anyone watching
+                // for it. Twenty an hour means the threshold or a rule needs attention.
+                _log.LogWarning(
+                    "Play/silence has flipped {Count} times in the last hour, which suggests the detection threshold or a rule needs adjusting. Try --diagnose.",
+                    _state.TransitionsThisHour);
+            }
+        }
+
+        _last = outcome;
+        Decided?.Invoke(this, (outcome, snapshot));
+    }
+
+    /// <summary>Builds a snapshot. Public so <c>--diagnose</c> can record without deciding.</summary>
+    public DetectionSnapshot Capture()
+    {
+        IReadOnlyList<SessionObservation> render = _sessions.Sample(DataFlow.Render);
+        IReadOnlyList<SessionObservation> capture = _config.MicrophoneSignal
+            ? _sessions.Sample(DataFlow.Capture)
+            : [];
+
+        (bool muted, float volume) = ReadDefaultEndpointVolume();
+
+        return new DetectionSnapshot(
+            At: DateTimeOffset.Now,
+            Render: render,
+            Capture: capture,
+            OutputEndpointPresent: true,
+            DefaultEndpointMuted: muted,
+            DefaultEndpointVolume: volume,
+            Shell: _config.FullscreenSignal || _config.FocusAssistSignal ? _signals.ReadShellActivity() : ShellActivity.Unknown,
+            UserIdle: _config.SilenceWhenIdleMinutes > 0 ? _signals.ReadUserIdle() : TimeSpan.Zero,
+            WorkstationLocked: _signals.WorkstationLocked,
+            Override: _override);
+    }
+
+    /// <summary>
+    /// The endpoint the user actually listens on. If it is muted or at zero, nothing playing
+    /// through it is audible, so nothing on it should silence our music.
+    /// </summary>
+    private (bool Muted, float Volume) ReadDefaultEndpointVolume()
+    {
+        try
+        {
+            using MMDevice? device = _catalog.TryGetDefault();
+            if (device is null)
+            {
+                return (false, 1f);
+            }
+
+            AudioEndpointVolume endpoint = device.AudioEndpointVolume;
+            return (endpoint.Mute, endpoint.MasterVolumeLevelScalar);
+        }
+        catch (COMException)
+        {
+            return (false, 1f);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _sessions.Dispose();
+    }
+}

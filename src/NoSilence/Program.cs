@@ -62,7 +62,9 @@ internal static class Program
             {
                 AppCommand.ListDevices => RunListDevices(services),
                 AppCommand.WriteIcon => RunWriteIcon(options),
-                AppCommand.Diagnose or AppCommand.Replay or AppCommand.DiscoverTv => RunNotYetImplemented(options),
+                AppCommand.Diagnose => services.GetRequiredService<DiagnosticRunner>().Run(options),
+                AppCommand.Replay => RunReplay(services, options),
+                AppCommand.DiscoverTv => RunNotYetImplemented(options),
                 _ => RunTray(services, options),
             };
         }
@@ -177,6 +179,49 @@ internal static class Program
         string preview = Path.ChangeExtension(path, ".preview.png");
         IconFactory.WritePreviewSheet(preview);
         Console.WriteLine($"Preview sheet: {Path.GetFullPath(preview)}");
+        return ExitOk;
+    }
+
+    private static int RunReplay(ServiceProvider services, CommandLineOptions options)
+    {
+        string path = options.SnapshotPath!;
+        if (!File.Exists(path))
+        {
+            Console.Error.WriteLine($"No recording at {Path.GetFullPath(path)}.");
+            return ExitFailure;
+        }
+
+        Settings.AppSettings settings = services.GetRequiredService<Settings.SettingsService>().Load();
+        Detection.DetectionConfig config = settings.Detection;
+
+        SnapshotReplayer.Result result = SnapshotReplayer.Run(SnapshotRecorder.Read(path), config);
+
+        Console.WriteLine($"Replayed {result.Snapshots} snapshots covering {result.Duration:hh\\:mm\\:ss}");
+        Console.WriteLine($"Settings: threshold {config.ThresholdDb:F0} dBFS · sustain {config.MinDurationMs} ms · release {config.ReleaseMs / 1000} s");
+        Console.WriteLine();
+
+        if (result.Transitions.Count == 0)
+        {
+            Console.WriteLine("  (the decision never changed)");
+        }
+        else
+        {
+            Console.WriteLine($"  {"at",10}  {"state",-8} reason");
+            Console.WriteLine(new string('-', 78));
+            foreach (SnapshotReplayer.Transition transition in result.Transitions)
+            {
+                Console.WriteLine($"  {transition.Elapsed:hh\\:mm\\:ss}  {(transition.Silent ? "SILENT" : "PLAYING"),-8} {transition.Reason}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Silent for {result.SilentFor:hh\\:mm\\:ss} ({result.SilentPercent:F0}% of the recording), {result.Transitions.Count} transitions.");
+
+        if (result.WorstFlapIn30Seconds >= 3)
+        {
+            Console.WriteLine($"Worst flapping: {result.WorstFlapIn30Seconds} transitions inside 30 seconds — the threshold or a rule needs adjusting.");
+        }
+
         return ExitOk;
     }
 
