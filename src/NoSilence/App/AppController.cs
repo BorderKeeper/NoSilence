@@ -23,6 +23,8 @@ internal sealed class AppController
     private readonly DeviceCatalog _catalog;
     private readonly MusicLibrary _library;
     private readonly AppPaths _paths;
+    private readonly Tv.TvService _tv;
+    private readonly Tv.Samsung.SamsungDiscovery _discovery;
     private readonly ILogger<AppController> _log;
 
     public AppController(
@@ -32,8 +34,12 @@ internal sealed class AppController
         DeviceCatalog catalog,
         MusicLibrary library,
         AppPaths paths,
+        Tv.TvService tv,
+        Tv.Samsung.SamsungDiscovery discovery,
         ILogger<AppController> log)
     {
+        _tv = tv;
+        _discovery = discovery;
         _settings = settings;
         _playback = playback;
         _detection = detection;
@@ -146,6 +152,40 @@ internal sealed class AppController
         change(_settings.Current.General);
         _settings.Save();
     }
+
+    // ---- television ------------------------------------------------------
+
+    public string TvStatus => _tv.Status;
+
+    public Tv.DisplayCapabilities TvCapabilities => _tv.Controller.Capabilities;
+
+    public bool TvControlEnabled => _tv.Controller.Capabilities != Tv.DisplayCapabilities.None;
+
+    /// <summary>Non-null while wake attempts are suppressed after a manual power-off.</summary>
+    public DateTimeOffset? TvWakeVetoedUntil => _tv.PolicyState.UserVetoUntil;
+
+    public void UpdateTv(Action<TvSettings> change)
+    {
+        change(_settings.Current.Tv);
+        _settings.Save();
+        _tv.RebuildController();
+    }
+
+    public void WakeTv() => _tv.WakeNow();
+
+    public void SleepTv() => _tv.SleepNow();
+
+    public void SendTvVolume(Tv.VolumeCommand command) => _tv.SendVolume(command);
+
+    public Task<bool> PairTvAsync(CancellationToken ct) => _tv.PairAsync(ct);
+
+    public Task<Tv.DisplayPowerState> GetTvPowerStateAsync(CancellationToken ct) => _tv.GetPowerStateAsync(ct);
+
+    public Task<IReadOnlyList<Tv.Samsung.SamsungDeviceInfo>> DiscoverTvsAsync(CancellationToken ct) =>
+        _discovery.SweepAsync(null, ct);
+
+    /// <summary>The panic switch: turns all television control off in one click.</summary>
+    public void DisableTvControl() => UpdateTv(t => t.Provider = "none");
 
     public void ResetDetectionToDefaults()
     {

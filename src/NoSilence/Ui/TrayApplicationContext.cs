@@ -6,6 +6,7 @@ using NoSilence.Audio;
 using NoSilence.Detection;
 using NoSilence.Playback;
 using NoSilence.Settings;
+using NoSilence.Tv;
 
 namespace NoSilence.Ui;
 
@@ -32,6 +33,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private ToolStripMenuItem _modeMenu = null!;
     private ToolStripMenuItem _snoozeMenu = null!;
     private ToolStripMenuItem _deviceMenu = null!;
+    private ToolStripMenuItem _tvMenu = null!;
     private ToolStripMenuItem _cancelSnooze = null!;
 
     private TrayIconState _state = TrayIconState.Waiting;
@@ -173,6 +175,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _deviceMenu = new ToolStripMenuItem("Output device");
         _menu.Items.Add(_deviceMenu);
 
+        _tvMenu = new ToolStripMenuItem("Television");
+        _menu.Items.Add(_tvMenu);
+
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(Item("Why is it silent?…", ExplainCurrentDecision));
         _menu.Items.Add(Item("Settings…", () => SettingsRequested?.Invoke(this, EventArgs.Empty)));
@@ -214,6 +219,57 @@ internal sealed class TrayApplicationContext : ApplicationContext
             : "Snooze";
 
         RefreshDeviceMenu();
+        RefreshTvMenu();
+    }
+
+    /// <summary>
+    /// Hidden entirely when no television provider is configured, rather than shown greyed —
+    /// most people will never set one up, and a permanently dead submenu is clutter.
+    /// </summary>
+    private void RefreshTvMenu()
+    {
+        _tvMenu.Available = _app.TvControlEnabled;
+        if (!_tvMenu.Available)
+        {
+            return;
+        }
+
+        _tvMenu.DropDownItems.Clear();
+
+        DisplayCapabilities capabilities = _app.TvCapabilities;
+
+        if (capabilities.HasFlag(DisplayCapabilities.Wake))
+        {
+            _tvMenu.DropDownItems.Add(Item("Turn the television on", () => _app.WakeTv()));
+        }
+
+        if (capabilities.HasFlag(DisplayCapabilities.Sleep))
+        {
+            _tvMenu.DropDownItems.Add(Item("Turn the television off", () => _app.SleepTv()));
+        }
+
+        if (capabilities.HasFlag(DisplayCapabilities.Volume))
+        {
+            _tvMenu.DropDownItems.Add(new ToolStripSeparator());
+            _tvMenu.DropDownItems.Add(Item("Volume up", () => _app.SendTvVolume(VolumeCommand.Up)));
+            _tvMenu.DropDownItems.Add(Item("Volume down", () => _app.SendTvVolume(VolumeCommand.Down)));
+            _tvMenu.DropDownItems.Add(Item("Mute", () => _app.SendTvVolume(VolumeCommand.ToggleMute)));
+        }
+
+        _tvMenu.DropDownItems.Add(new ToolStripSeparator());
+
+        string status = _app.TvWakeVetoedUntil is { } veto && veto > DateTimeOffset.Now
+            ? $"Waking paused until {veto.LocalDateTime:HH:mm} (you turned it off)"
+            : _app.TvStatus;
+
+        _tvMenu.DropDownItems.Add(new ToolStripMenuItem(status) { Enabled = false });
+
+        // The panic switch. Always one click away.
+        _tvMenu.DropDownItems.Add(Item("Turn off all television control", () =>
+        {
+            _app.DisableTvControl();
+            ShowBalloon("NoSilence", "Television control is now off.", ToolTipIcon.Info, force: true);
+        }));
     }
 
     private void RefreshDeviceMenu()

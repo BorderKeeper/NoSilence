@@ -31,6 +31,9 @@ internal sealed class SettingsForm : Form
     private Label _outputStatus = null!;
     private CheckBox _runAtStartup = null!;
     private ComboBox _notifications = null!;
+    private TextBox? _tvHost;
+    private TextBox? _tvMac;
+    private Label? _tvStatus;
 
     public SettingsForm(AppController app, StartupRegistration startup)
     {
@@ -48,6 +51,7 @@ internal sealed class SettingsForm : Form
         tabs.TabPages.Add(BuildLibraryTab());
         tabs.TabPages.Add(BuildOutputTab());
         tabs.TabPages.Add(BuildDetectionTab());
+        tabs.TabPages.Add(BuildTelevisionTab());
         tabs.TabPages.Add(BuildGeneralTab());
         Controls.Add(tabs);
 
@@ -313,6 +317,164 @@ internal sealed class SettingsForm : Form
         return page;
     }
 
+    // ---- television ------------------------------------------------------
+
+    private TabPage BuildTelevisionTab()
+    {
+        var page = NewPage("Television");
+        var layout = NewColumn();
+        TvSettings tv = _app.Settings.Tv;
+
+        layout.Controls.Add(Heading("Turning the television on"));
+        layout.Controls.Add(Hint(
+            "A PC graphics card cannot send HDMI-CEC, so the television has to be woken over the network. " +
+            "For Samsung sets that means Wake-on-LAN, which needs Network Standby enabled on the TV " +
+            "(Settings > General > Network > Expert Settings) and works far more reliably over Ethernet than Wi-Fi."));
+
+        var provider = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
+        provider.Items.AddRange(["none", "samsung", "wol", "shell"]);
+        provider.SelectedItem = tv.Provider;
+        provider.SelectedIndexChanged += (_, _) =>
+        {
+            if (provider.SelectedItem is string value)
+            {
+                _app.UpdateTv(t => t.Provider = value);
+                RefreshTvStatus();
+            }
+        };
+
+        var providerRow = new FlowLayoutPanel { AutoSize = true };
+        providerRow.Controls.Add(new Label { Text = "Method", AutoSize = true, Width = 220, Padding = new Padding(0, 6, 8, 0) });
+        providerRow.Controls.Add(provider);
+        layout.Controls.Add(providerRow);
+
+        _tvHost = TextRow(layout, "Television IP address", tv.Host, v => _app.UpdateTv(t => t.Host = v));
+        _tvMac = TextRow(layout, "MAC address", tv.MacAddress ?? string.Empty, v => _app.UpdateTv(t => t.MacAddress = v));
+        layout.Controls.Add(Hint(
+            "Leave the MAC blank to look it up automatically. Set it by hand if waking fails: a Samsung set often " +
+            "reports its Wi-Fi radio's address even when it is plugged into Ethernet, and a packet sent there will never wake it."));
+
+        var buttons = new FlowLayoutPanel { AutoSize = true };
+        buttons.Controls.Add(Button("Find my television…", DiscoverTvs));
+        buttons.Controls.Add(Button("Pair", PairTv));
+        buttons.Controls.Add(Button("Turn on", () => { _app.WakeTv(); RefreshTvStatus(); }));
+        buttons.Controls.Add(Button("Turn off", () => { _app.SleepTv(); RefreshTvStatus(); }));
+        layout.Controls.Add(buttons);
+
+        _tvStatus = Hint(string.Empty);
+        layout.Controls.Add(_tvStatus);
+
+        layout.Controls.Add(Heading("When to do it automatically"));
+        layout.Controls.Add(Check("Turn the television on when there is music to play", tv.Policy.WakeEnabled,
+            v => _app.UpdateTv(t => t.Policy.WakeEnabled = v)));
+        layout.Controls.Add(Spinner("…after wanting to play for (seconds)", 10, 3600, tv.Policy.RequireWantsToPlayForMs / 1000,
+            v => _app.UpdateTv(t => t.Policy.RequireWantsToPlayForMs = v * 1000)));
+        layout.Controls.Add(Hint("Long enough that a brief gap between videos can never power-cycle the television."));
+
+        layout.Controls.Add(Check("Turn the television off when it has been silent for a while", tv.Policy.SleepEnabled,
+            v => _app.UpdateTv(t => t.Policy.SleepEnabled = v)));
+        layout.Controls.Add(Spinner("…after being idle for (minutes)", 1, 480, tv.Policy.SleepAfterMs / 60000,
+            v => _app.UpdateTv(t => t.Policy.SleepAfterMs = v * 60000)));
+        layout.Controls.Add(Check("Only turn it off if NoSilence turned it on", tv.Policy.OnlySleepIfWeWokeIt,
+            v => _app.UpdateTv(t => t.Policy.OnlySleepIfWeWokeIt = v)));
+
+        layout.Controls.Add(Spinner("Stop trying for this long after you switch it off (minutes)", 0, 720, tv.Policy.UserVetoMinutes,
+            v => _app.UpdateTv(t => t.Policy.UserVetoMinutes = v)));
+        layout.Controls.Add(Hint(
+            "If you turn the television off by hand, NoSilence stops trying to wake it for this long — otherwise the two of you end up fighting over it."));
+
+        layout.Controls.Add(Spinner("Never send more power commands per hour than", 1, 60, tv.Policy.MaxPowerCommandsPerHour,
+            v => _app.UpdateTv(t => t.Policy.MaxPowerCommandsPerHour = v)));
+
+        page.Controls.Add(layout);
+        return page;
+    }
+
+    private void RefreshTvStatus()
+    {
+        if (_tvStatus is not null)
+        {
+            _tvStatus.Text = _app.TvStatus;
+        }
+    }
+
+    private void DiscoverTvs()
+    {
+        UseWaitCursor = true;
+        try
+        {
+            IReadOnlyList<Tv.Samsung.SamsungDeviceInfo> found = _app
+                .DiscoverTvsAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+            if (found.Count == 0)
+            {
+                MessageBox.Show(this,
+                    "No televisions answered.\n\nA Samsung set only answers when Network Standby is enabled:\n" +
+                    "Settings > General > Network > Expert Settings > Power On with Mobile",
+                    "NoSilence", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            Tv.Samsung.SamsungDeviceInfo tv = found[0];
+            _tvHost!.Text = tv.Ip;
+
+            if (System.Net.IPAddress.TryParse(tv.Ip, out System.Net.IPAddress? address) &&
+                Tv.WakeOnLan.TryResolveMacViaArp(address) is { } arp)
+            {
+                _tvMac!.Text = Tv.WakeOnLan.FormatMac(arp);
+            }
+            else if (tv.Mac is { } reported)
+            {
+                _tvMac!.Text = reported;
+            }
+
+            _app.UpdateTv(t =>
+            {
+                t.Provider = "samsung";
+                t.Host = _tvHost.Text;
+                t.MacAddress = _tvMac!.Text;
+            });
+
+            MessageBox.Show(this, $"Found {tv.Describe()}.\n\nNow use Pair, and accept the prompt on the television.",
+                "NoSilence", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+            RefreshTvStatus();
+        }
+    }
+
+    private void PairTv()
+    {
+        UseWaitCursor = true;
+        try
+        {
+            bool paired = _app.PairTvAsync(CancellationToken.None).GetAwaiter().GetResult();
+            MessageBox.Show(this,
+                paired ? "Paired. The television will not ask again." : "Pairing failed. Make sure the television is switched on.",
+                "NoSilence", MessageBoxButtons.OK, paired ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+            RefreshTvStatus();
+        }
+    }
+
+    private TextBox TextRow(Control parent, string label, string value, Action<string> onChange)
+    {
+        var row = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+        row.Controls.Add(new Label { Text = label, AutoSize = true, Width = 220, Padding = new Padding(0, 6, 8, 0) });
+
+        var box = new TextBox { Text = value, Width = 260 };
+        box.Leave += (_, _) => onChange(box.Text.Trim());
+        row.Controls.Add(box);
+
+        parent.Controls.Add(row);
+        return box;
+    }
+
     // ---- general ---------------------------------------------------------
 
     private TabPage BuildGeneralTab()
@@ -377,14 +539,17 @@ internal sealed class SettingsForm : Form
         Margin = new Padding(0, 14, 0, 6),
     };
 
+    /// <summary>
+    /// Explanatory text under a control. Auto-sizes with a width cap so it wraps and grows
+    /// instead of being clipped — a fixed height silently truncated the longer notes.
+    /// </summary>
     private static Label Hint(string text) => new()
     {
         Text = text,
-        AutoSize = false,
-        Width = 780,
-        Height = 34,
+        AutoSize = true,
+        MaximumSize = new Size(780, 0),
         ForeColor = SystemColors.GrayText,
-        Margin = new Padding(0, 0, 0, 8),
+        Margin = new Padding(0, 0, 0, 10),
     };
 
     private static Button Button(string text, Action action)

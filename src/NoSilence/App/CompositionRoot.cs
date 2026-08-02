@@ -51,6 +51,9 @@ internal static class CompositionRoot
 
         services.AddSingleton<AppController>();
         services.AddSingleton<StartupRegistration>();
+        services.AddSingleton<StateService>();
+        services.AddSingleton<Tv.TvService>();
+        services.AddSingleton<Tv.Samsung.SamsungDiscovery>();
         services.AddSingleton<TrayApplicationContext>();
         services.AddSingleton<UiDispatcher>();
         services.AddSingleton<AppHost>();

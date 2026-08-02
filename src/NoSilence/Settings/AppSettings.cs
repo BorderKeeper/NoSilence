@@ -25,7 +25,37 @@ internal sealed class AppSettings
     /// </summary>
     public Detection.DetectionConfig Detection { get; set; } = new();
 
+    public TvSettings Tv { get; set; } = new();
+
     public GeneralSettings General { get; set; } = new();
+}
+
+internal sealed class TvSettings
+{
+    /// <summary><c>none</c>, <c>wol</c>, <c>shell</c> or <c>samsung</c>.</summary>
+    public string Provider { get; set; } = "none";
+
+    /// <summary>The television's IP address.</summary>
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Overrides the automatically discovered MAC. Worth having: the address a Samsung set
+    /// reports about itself is often its Wi-Fi radio's, which cannot wake a wired one.
+    /// </summary>
+    public string? MacAddress { get; set; }
+
+    /// <summary>How long to wait for the HDMI endpoint to reappear after a wake.</summary>
+    public int WaitForEndpointMs { get; set; } = 45000;
+
+    /// <summary>Command or URL run to wake the display, for the shell provider.</summary>
+    public string? WakeCommand { get; set; }
+
+    public string? SleepCommand { get; set; }
+
+    /// <summary>Command whose output is matched against on/off/standby.</summary>
+    public string? StateCommand { get; set; }
+
+    public Tv.TvPolicyConfig Policy { get; set; } = new();
 }
 
 internal sealed class LibrarySettings

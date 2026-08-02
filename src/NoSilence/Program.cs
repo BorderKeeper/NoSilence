@@ -64,7 +64,7 @@ internal static class Program
                 AppCommand.WriteIcon => RunWriteIcon(options),
                 AppCommand.Diagnose => services.GetRequiredService<DiagnosticRunner>().Run(options),
                 AppCommand.Replay => RunReplay(services, options),
-                AppCommand.DiscoverTv => RunNotYetImplemented(options),
+                AppCommand.DiscoverTv => RunDiscoverTv(services, options),
                 _ => RunTray(services, options),
             };
         }
@@ -222,6 +222,53 @@ internal static class Program
             Console.WriteLine($"Worst flapping: {result.WorstFlapIn30Seconds} transitions inside 30 seconds — the threshold or a rule needs adjusting.");
         }
 
+        return ExitOk;
+    }
+
+    private static int RunDiscoverTv(ServiceProvider services, CommandLineOptions options)
+    {
+        var discovery = services.GetRequiredService<Tv.Samsung.SamsungDiscovery>();
+
+        IReadOnlyList<string> subnets = options.Subnet is { Length: > 0 }
+            ? [options.Subnet]
+            : Tv.Samsung.SamsungDiscovery.LocalSubnets();
+
+        Console.WriteLine($"Sweeping {string.Join(", ", subnets.Select(s => s + ".1-254"))} for Samsung televisions…");
+        Console.WriteLine();
+
+        IReadOnlyList<Tv.Samsung.SamsungDeviceInfo> found = discovery
+            .SweepAsync(options.Subnet, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        if (found.Count == 0)
+        {
+            Console.WriteLine("No televisions answered.");
+            Console.WriteLine();
+            Console.WriteLine("A Samsung set only answers when network standby is enabled:");
+            Console.WriteLine("  Settings > General > Network > Expert Settings > Power On with Mobile");
+            return ExitFailure;
+        }
+
+        foreach (Tv.Samsung.SamsungDeviceInfo tv in found)
+        {
+            Console.WriteLine(tv.Describe());
+            Console.WriteLine($"    ip          : {tv.Ip}");
+            Console.WriteLine($"    power       : {tv.PowerState ?? "not reported by this firmware"}");
+            Console.WriteLine($"    mac (its own): {tv.Mac ?? "not reported"}");
+
+            // The set's own answer is frequently its Wi-Fi radio, which cannot wake a wired
+            // one; ARP reports the adapter actually carrying this address.
+            if (System.Net.IPAddress.TryParse(tv.Ip, out System.Net.IPAddress? address) &&
+                Tv.WakeOnLan.TryResolveMacViaArp(address) is { } arp)
+            {
+                Console.WriteLine($"    mac (ARP)   : {Tv.WakeOnLan.FormatMac(arp)}   <- prefer this one");
+            }
+
+            Console.WriteLine();
+        }
+
+        Console.WriteLine("Set these on the Television tab in Settings.");
         return ExitOk;
     }
 

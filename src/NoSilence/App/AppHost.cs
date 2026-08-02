@@ -25,6 +25,8 @@ internal sealed class AppHost : IDisposable
     private readonly UiDispatcher _ui;
     private readonly AppController _controller;
     private readonly StartupRegistration _startup;
+    private readonly Tv.TvService _tv;
+    private readonly StateService _state;
     private readonly ILogger<AppHost> _log;
 
     private SettingsForm? _settingsForm;
@@ -40,10 +42,14 @@ internal sealed class AppHost : IDisposable
         UiDispatcher ui,
         AppController controller,
         StartupRegistration startup,
+        Tv.TvService tv,
+        StateService state,
         ILogger<AppHost> log)
     {
         _controller = controller;
         _startup = startup;
+        _tv = tv;
+        _state = state;
         _settings = settings;
         _library = library;
         _engine = engine;
@@ -81,7 +87,20 @@ internal sealed class AppHost : IDisposable
         // An endpoint appearing or disappearing changes which sessions exist, so the cached
         // session list has to be rebuilt rather than waiting out the refresh interval.
         _playback.OutputDeviceAcquired += (_, _) => _detection.InvalidateSessions();
-        _playback.OutputDeviceLost += (_, _) => _detection.InvalidateSessions();
+        _playback.OutputDeviceLost += (_, _) =>
+        {
+            _detection.InvalidateSessions();
+            _tv.NoteOutputDeviceLost();
+        };
+
+        _state.Load();
+        _tv.Configure(
+            endpointPresent: () => _playback.HasOutputDevice,
+            wantsToPlay: () => _detection.LastOutcome is { WantsSilence: false },
+            libraryHasTracks: () => _library.Tracks.Count > 0,
+            currentOverride: () => _detection.Override);
+
+        _engine.Tick += _tv.Tick;
 
         _tray.ExitRequested += (_, _) => _log.LogInformation("Exit requested from the tray.");
         _tray.SettingsRequested += (_, _) => ShowSettings();
@@ -139,6 +158,8 @@ internal sealed class AppHost : IDisposable
         _detection.Decided -= OnDecided;
         _engine.Tick -= _playback.Poll;
         _engine.Tick -= _detection.Tick;
+        _engine.Tick -= _tv.Tick;
+        _tv.Dispose();
 
         _settingsForm?.Dispose();
 
