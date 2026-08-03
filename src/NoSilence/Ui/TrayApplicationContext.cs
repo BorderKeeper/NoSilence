@@ -72,8 +72,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _log.LogInformation("Tray icon created.");
     }
 
-    /// <summary>Raised when the user asks for the settings window. Wired up in M5.</summary>
+    /// <summary>
+    /// Raised when the user asks for the settings window. Carries
+    /// <see cref="ShowLiveViewArgs"/> when it should open on the live view.
+    /// </summary>
     public event EventHandler? SettingsRequested;
+
+    /// <summary>Marker telling the host to open the settings window on the live view.</summary>
+    internal sealed class ShowLiveViewArgs : EventArgs
+    {
+        public static ShowLiveViewArgs Instance { get; } = new();
+    }
 
     public event EventHandler? ExitRequested;
 
@@ -179,7 +188,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_tvMenu);
 
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(Item("Why is it silent?…", ExplainCurrentDecision));
+        // Opens straight onto the live view, which answers the question far better than a
+        // balloon: it names every source, its level, and whether it counts.
+        _menu.Items.Add(Item("Why is it silent?…", () => SettingsRequested?.Invoke(this, ShowLiveViewArgs.Instance)));
         _menu.Items.Add(Item("Settings…", () => SettingsRequested?.Invoke(this, EventArgs.Empty)));
         _menu.Items.Add(Item("Open log folder", () => _app.OpenLogFolder()));
         _menu.Items.Add(new ToolStripSeparator());

@@ -117,7 +117,7 @@ internal static class Program
 
         if (options.ShowSettings)
         {
-            host.ShowSettings();
+            host.ShowSettings(Ui.SettingsForm.LiveTabTitle);
         }
 
         Application.Run(tray);

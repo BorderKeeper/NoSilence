@@ -31,6 +31,27 @@ internal sealed class SettingsForm : Form
     private Label _outputStatus = null!;
     private CheckBox _runAtStartup = null!;
     private ComboBox _notifications = null!;
+    /// <summary>The live view, fed by the host while the window is visible.</summary>
+    public LiveSessionView? Live { get; private set; }
+
+    private TabControl _tabs = null!;
+
+    /// <summary>Brings a named tab to the front. Used to open straight onto the live view.</summary>
+    public void SelectTab(string title)
+    {
+        foreach (TabPage page in _tabs.TabPages)
+        {
+            if (string.Equals(page.Text, title, StringComparison.OrdinalIgnoreCase))
+            {
+                _tabs.SelectedTab = page;
+                return;
+            }
+        }
+    }
+
+    /// <summary>The tab that answers "why is it silent?".</summary>
+    public const string LiveTabTitle = "What's playing";
+
     private TextBox? _tvHost;
     private TextBox? _tvMac;
     private Label? _tvStatus;
@@ -47,9 +68,11 @@ internal sealed class SettingsForm : Form
         ShowInTaskbar = true;          // so Alt-Tab finds it
         Icon = TryLoadIcon();
 
-        var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(12, 6) };
+        _tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(12, 6) };
+        TabControl tabs = _tabs;
         tabs.TabPages.Add(BuildLibraryTab());
         tabs.TabPages.Add(BuildOutputTab());
+        tabs.TabPages.Add(BuildLiveTab());
         tabs.TabPages.Add(BuildDetectionTab());
         tabs.TabPages.Add(BuildTelevisionTab());
         tabs.TabPages.Add(BuildGeneralTab());
@@ -311,9 +334,27 @@ internal sealed class SettingsForm : Form
                 "NoSilence", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }));
 
-        layout.Controls.Add(Hint("A live view of what is making noise right now is coming next."));
-
         page.Controls.Add(layout);
+        return page;
+    }
+
+    /// <summary>
+    /// The live view gets its own tab rather than sitting under the sliders. It is the thing
+    /// you keep open while tuning, and it needs the whole window to be readable.
+    /// </summary>
+    private TabPage BuildLiveTab()
+    {
+        var page = new TabPage(LiveTabTitle) { Padding = new Padding(12), UseVisualStyleBackColor = true };
+
+        Live = new LiveSessionView();
+        Live.RuleRequested += (_, e) =>
+        {
+            _app.SetRuleFor(e.ExeName, e.Mode);
+            MessageBox.Show(this, $"{e.ExeName} is now set to \"{e.Mode}\".", "NoSilence",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+
+        page.Controls.Add(Live);
         return page;
     }
 

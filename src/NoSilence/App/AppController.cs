@@ -187,6 +187,25 @@ internal sealed class AppController
     /// <summary>The panic switch: turns all television control off in one click.</summary>
     public void DisableTvControl() => UpdateTv(t => t.Provider = "none");
 
+    /// <summary>
+    /// Adds or replaces a rule for an application. Used by the live view's right-click menu,
+    /// which is the fastest possible way to fix a false positive: see it, click it, done.
+    /// </summary>
+    public void SetRuleFor(string exeName, RuleMode mode)
+    {
+        List<ProcessRule> rules = _settings.Current.Detection.Rules;
+        rules.RemoveAll(r => r.MatchKind == RuleMatchKind.ExeName
+            && string.Equals(r.Match, exeName, StringComparison.OrdinalIgnoreCase));
+
+        // Inserted at the front: first match wins, so a rule the user just chose has to
+        // outrank the built-in one it is replacing.
+        rules.Insert(0, new ProcessRule(exeName, RuleMatchKind.ExeName, mode));
+
+        _settings.Save();
+        _detection.Configure(_settings.Current.Detection);
+        _log.LogInformation("Rule for {Exe} set to {Mode}.", exeName, mode);
+    }
+
     public void ResetDetectionToDefaults()
     {
         _settings.Current.Detection = new DetectionConfig();

@@ -103,7 +103,8 @@ internal sealed class AppHost : IDisposable
         _engine.Tick += _tv.Tick;
 
         _tray.ExitRequested += (_, _) => _log.LogInformation("Exit requested from the tray.");
-        _tray.SettingsRequested += (_, _) => ShowSettings();
+        _tray.SettingsRequested += (_, e) =>
+            ShowSettings(e is TrayApplicationContext.ShowLiveViewArgs ? SettingsForm.LiveTabTitle : null);
 
         _startup.RepairIfStale();
 
@@ -114,11 +115,17 @@ internal sealed class AppHost : IDisposable
     /// Shows the settings window, creating it on first use. It is kept alive and hidden
     /// afterwards, so reopening is instant.
     /// </summary>
-    public void ShowSettings()
+    public void ShowSettings(string? tab = null)
     {
         _settingsForm ??= new SettingsForm(_controller, _startup);
 
         _settingsForm.ReloadFromSettings();
+
+        if (tab is not null)
+        {
+            _settingsForm.SelectTab(tab);
+        }
+
         _settingsForm.Show();
 
         if (_settingsForm.WindowState == System.Windows.Forms.FormWindowState.Minimized)
@@ -142,6 +149,20 @@ internal sealed class AppHost : IDisposable
     private void OnDecided(object? sender, (Detection.DecisionOutcome Outcome, Detection.DetectionSnapshot Snapshot) e)
     {
         _playback.ApplyDecision(e.Outcome);
+
+        // Only marshal to the UI when someone is actually looking. At 4 Hz this would
+        // otherwise post a message to the UI thread forever for a window nobody opened.
+        if (_settingsForm is { Visible: true, Live: not null } form)
+        {
+            Detection.DecisionOutcome outcome = e.Outcome;
+            _ui.Post(() =>
+            {
+                if (form is { IsDisposed: false, Visible: true, Live: not null })
+                {
+                    form.Live.Update(outcome);
+                }
+            });
+        }
     }
 
     public void Dispose()
