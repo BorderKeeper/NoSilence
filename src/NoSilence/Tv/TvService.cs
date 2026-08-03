@@ -34,7 +34,7 @@ internal sealed class TvService : IDisposable
 
     private long _nextEvaluationAt;
     private int _busy;
-    private bool _weJustSentSleep;
+    private DateTimeOffset _sleepCommandSentAt = DateTimeOffset.MinValue;
     private bool _disposed;
 
     public TvService(SettingsService settings, StateService state, ILoggerFactory loggerFactory, ILogger<TvService> log)
@@ -181,19 +181,14 @@ internal sealed class TvService : IDisposable
                 _log.LogInformation("Turning the television off ({Trigger}).", automatic ? "automatically" : "on request");
 
                 // Suppress the user-veto rule for the endpoint loss we are about to cause.
-                _weJustSentSleep = true;
-                try
-                {
-                    bool ok = await _controller.SleepAsync(ct).ConfigureAwait(false);
-                    _state.Current.TvPolicy.WeWokeIt = false;
-                    Status = ok ? "The television has been turned off." : "The television could not be turned off.";
-                }
-                finally
-                {
-                    // Endpoint removal follows the command by a second or two.
-                    await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
-                    _weJustSentSleep = false;
-                }
+                // Recorded as a timestamp rather than held as a flag across a delay: doing
+                // the latter kept the single-operation guard locked for ten seconds, during
+                // which a "turn it on" click was silently dropped.
+                _sleepCommandSentAt = DateTimeOffset.Now;
+
+                bool ok = await _controller.SleepAsync(ct).ConfigureAwait(false);
+                _state.Current.TvPolicy.WeWokeIt = false;
+                Status = ok ? "The television has been turned off." : "The television could not be turned off.";
             }
 
             _state.Save();
@@ -206,7 +201,11 @@ internal sealed class TvService : IDisposable
     /// </summary>
     public void NoteOutputDeviceLost()
     {
-        if (_weJustSentSleep || _controller.Capabilities == DisplayCapabilities.None)
+        // Endpoint removal follows our own power-off by a second or two, and that must not
+        // be mistaken for the user switching the set off by hand.
+        bool weCausedIt = DateTimeOffset.Now - _sleepCommandSentAt < TimeSpan.FromSeconds(20);
+
+        if (weCausedIt || _controller.Capabilities == DisplayCapabilities.None)
         {
             return;
         }
@@ -228,7 +227,12 @@ internal sealed class TvService : IDisposable
     {
         if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
-            _log.LogDebug("A television operation is already running; ignoring this one.");
+            // Visible rather than silent: a dropped button press with no feedback looks
+            // exactly like a broken app.
+            const string Message = "Another television command is still running; ignoring this one.";
+            _log.LogWarning(Message);
+            Status = Message;
+            Diagnostic?.Invoke(this, new DisplayEvent(Message, IsError: true));
             return;
         }
 

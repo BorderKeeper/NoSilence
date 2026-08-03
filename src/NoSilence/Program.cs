@@ -65,6 +65,8 @@ internal static class Program
                 AppCommand.Diagnose => services.GetRequiredService<DiagnosticRunner>().Run(options),
                 AppCommand.Replay => RunReplay(services, options),
                 AppCommand.DiscoverTv => RunDiscoverTv(services, options),
+                AppCommand.WakeTv => RunTvPower(services, wake: true),
+                AppCommand.SleepTv => RunTvPower(services, wake: false),
                 _ => RunTray(services, options),
             };
         }
@@ -270,6 +272,53 @@ internal static class Program
 
         Console.WriteLine("Set these on the Television tab in Settings.");
         return ExitOk;
+    }
+
+    /// <summary>
+    /// Drives the television directly, without the tray. Useful for scripting, and the only
+    /// way to exercise the wake path without clicking a menu.
+    /// </summary>
+    private static int RunTvPower(ServiceProvider services, bool wake)
+    {
+        var settingsService = services.GetRequiredService<Settings.SettingsService>();
+        var stateService = services.GetRequiredService<Settings.StateService>();
+        var tv = services.GetRequiredService<Tv.TvService>();
+        var catalog = services.GetRequiredService<DeviceCatalog>();
+
+        Settings.AppSettings settings = settingsService.Load();
+        stateService.Load();
+
+        if (string.Equals(settings.Tv.Provider, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("No television is configured. Use --discover-tv, or the Television tab in Settings.");
+            return ExitFailure;
+        }
+
+        // "Is the television on?" is answered by whether its audio endpoint is active — no
+        // network round trip, and it is the only signal that also means "on this input".
+        bool EndpointPresent()
+        {
+            string? id = settings.Output.DeviceId;
+            return id is not null && catalog.List(DataFlow.Render).Any(d => string.Equals(d.Id, id, StringComparison.Ordinal));
+        }
+
+        tv.Diagnostic += (_, e) => Console.WriteLine($"  {(e.IsError ? "!" : "-")} {e.Message}");
+        tv.Configure(EndpointPresent, () => true, () => true, () => Detection.OverrideState.Auto);
+
+        Console.WriteLine($"{tv.Controller.DisplayName}");
+        Console.WriteLine($"HDMI audio endpoint present: {EndpointPresent()}");
+        Console.WriteLine();
+
+        bool result = wake
+            ? tv.Controller.WakeAsync(CancellationToken.None).GetAwaiter().GetResult()
+            : tv.Controller.SleepAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+        Console.WriteLine();
+        Console.WriteLine(result ? "Done." : "That did not work.");
+        Console.WriteLine($"HDMI audio endpoint present now: {EndpointPresent()}");
+
+        stateService.Save();
+        return result ? ExitOk : ExitFailure;
     }
 
     private static int RunNotYetImplemented(CommandLineOptions options)

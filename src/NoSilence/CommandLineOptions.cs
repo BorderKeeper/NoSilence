@@ -19,6 +19,12 @@ internal enum AppCommand
     /// <summary>Sweep the LAN for Samsung TVs, then exit.</summary>
     DiscoverTv,
 
+    /// <summary>Turn the configured television on, then exit.</summary>
+    WakeTv,
+
+    /// <summary>Turn the configured television off, then exit.</summary>
+    SleepTv,
+
     /// <summary>Regenerate the application icon asset, then exit. Design-time only.</summary>
     WriteIcon,
 
@@ -71,7 +77,7 @@ internal sealed record CommandLineOptions
     /// <summary>True for the commands that write to stdout and need a console attached.</summary>
     public bool IsConsoleCommand => Command is AppCommand.ListDevices or AppCommand.Diagnose
         or AppCommand.Replay or AppCommand.DiscoverTv or AppCommand.WriteIcon or AppCommand.Help
-        or AppCommand.Quit;
+        or AppCommand.Quit or AppCommand.WakeTv or AppCommand.SleepTv;
 
     public static bool TryParse(string[] args, out CommandLineOptions options, out string? error)
     {
@@ -109,6 +115,14 @@ internal sealed record CommandLineOptions
 
                 case "discover-tv" or "discovertv":
                     command = AppCommand.DiscoverTv;
+                    break;
+
+                case "wake-tv" or "waketv":
+                    command = AppCommand.WakeTv;
+                    break;
+
+                case "sleep-tv" or "sleeptv":
+                    command = AppCommand.SleepTv;
                     break;
 
                 case "tray":
@@ -267,6 +281,8 @@ internal sealed record CommandLineOptions
         Television:
           --discover-tv           Sweep the local network for Samsung TVs.
             --subnet 192.168.1      Restrict the sweep (default: auto-detect).
+          --wake-tv               Turn the configured television on and report what happened.
+          --sleep-tv              Turn the configured television off.
 
         Other:
           --data-root DIR         Use DIR instead of %APPDATA%\NoSilence.

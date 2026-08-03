@@ -69,66 +69,150 @@ internal sealed class SamsungTvController : IDisplayController
     /// showing this input". The network API can cheerfully report "on" while the set is
     /// displaying a games console.
     /// </remarks>
+    /// <summary>
+    /// Works out whether the television is actually on.
+    /// </summary>
+    /// <remarks>
+    /// The television's own report wins over the HDMI audio endpoint, which sounds backwards
+    /// and is not. Endpoint presence was the original primary sensor on the reasoning that
+    /// Windows deletes the endpoint when a TV powers off — and it does, when the set is
+    /// switched off with its remote. But a <c>KEY_POWEROFF</c> standby on this set leaves the
+    /// HDMI link asserted, so Windows keeps the endpoint Active while the screen is dark.
+    /// Trusting the endpoint there makes the app conclude "already on" and refuse to wake it.
+    /// <para>
+    /// So: an explicit standby report is believed outright; the endpoint is only consulted
+    /// when the set reports nothing useful, or cannot be reached at all.
+    /// </para>
+    /// </remarks>
     public async Task<DisplayPowerState> GetPowerStateAsync(CancellationToken ct)
     {
+        SamsungDeviceInfo? info = await GetInfoAsync(ct).ConfigureAwait(false);
+
+        if (info?.IsStandby == true)
+        {
+            return DisplayPowerState.Standby;
+        }
+
+        if (info?.IsOn == true)
+        {
+            // On, though not necessarily showing this input — the endpoint tells us that.
+            return DisplayPowerState.On;
+        }
+
         if (_endpointPresent())
         {
             return DisplayPowerState.On;
         }
 
-        SamsungDeviceInfo? info = await GetInfoAsync(ct).ConfigureAwait(false);
-
-        if (info is null)
-        {
-            return DisplayPowerState.Unreachable;
-        }
-
-        if (info.IsStandby)
-        {
-            return DisplayPowerState.Standby;
-        }
-
-        // It answered, so it is at least network-awake — but the HDMI endpoint is absent,
-        // which means it is not showing us. Standby is the honest answer.
-        return info.IsOn ? DisplayPowerState.On : DisplayPowerState.Standby;
+        return info is null ? DisplayPowerState.Unreachable : DisplayPowerState.Standby;
     }
 
+    /// <summary>
+    /// Turns the television on, trying both mechanisms.
+    /// </summary>
+    /// <remarks>
+    /// Wake-on-LAN is sent first because it is the only option for a set that shuts its
+    /// network ports down in standby. But not every set does: this one keeps 8001, 8002 and
+    /// 8080 open and answers its device-info API while asleep, and simply ignores magic
+    /// packets — verified by sending 54 of them from three interfaces with no effect. For
+    /// those, KEY_POWER over the remote channel works and is deterministic.
+    /// <para>
+    /// KEY_POWER is a <b>toggle</b>, so it is only ever sent once we are satisfied the set is
+    /// actually asleep: the HDMI endpoint must be absent <em>and</em> the television must
+    /// either report standby or not report a power state at all. Getting that wrong turns a
+    /// television off instead of on.
+    /// </para>
+    /// </remarks>
     public async Task<bool> WakeAsync(CancellationToken ct)
     {
+        _cachedInfo = null;   // never decide power state from a stale cache
+        DisplayPowerState state = await GetPowerStateAsync(ct).ConfigureAwait(false);
+
+        if (state == DisplayPowerState.On)
+        {
+            Report("The television is already on.");
+            return true;
+        }
+
+        Report($"The television reports {state.ToString().ToLowerInvariant()}; waking it.");
+        bool attempted = false;
+
+        // 1. Wake-on-LAN. Harmless when unsupported, and essential when the set powers its
+        //    network interface down.
         byte[]? mac = await ResolveMacAsync(ct).ConfigureAwait(false);
-        if (mac is null)
+        if (mac is not null)
         {
-            Report("No MAC address for the television, so it cannot be woken. Set one on the TV tab.", isError: true);
+            IPAddress? address = IPAddress.TryParse(_settings.Host, out IPAddress? parsed) ? parsed : null;
+            int sent = await WakeOnLan.SendAsync(mac, address, _log, ct: ct).ConfigureAwait(false);
+            attempted |= sent > 0;
+            Report($"Sent {sent} Wake-on-LAN packet(s) to {WakeOnLan.FormatMac(mac)}.");
+        }
+        else
+        {
+            Report("No MAC address for the television, so Wake-on-LAN was skipped.");
+        }
+
+        // 2. Give Wake-on-LAN a few seconds, then fall back to the remote channel. On sets
+        //    that keep their ports open in standby — this one does — that is the mechanism
+        //    that actually works.
+        if (await WaitForOnAsync(TimeSpan.FromSeconds(8), ct).ConfigureAwait(false))
+        {
+            Report("The television is awake.");
+            return true;
+        }
+
+        if (await GetPowerStateAsync(ct).ConfigureAwait(false) == DisplayPowerState.Unreachable)
+        {
+            Report("The television is not answering on the network, so the remote cannot be used to turn it on.", isError: true);
             return false;
         }
 
-        IPAddress? address = IPAddress.TryParse(_settings.Host, out IPAddress? parsed) ? parsed : null;
-        int sent = await WakeOnLan.SendAsync(mac, address, _log, ct: ct).ConfigureAwait(false);
+        Report("Wake-on-LAN had no effect; sending the power key over the network instead.");
+        attempted |= await GetRemote().SendKeyAsync(SamsungKeys.Power, ct).ConfigureAwait(false);
 
-        if (sent == 0)
+        if (!attempted)
         {
-            Report("Could not send any Wake-on-LAN packets.", isError: true);
+            Report("Could not reach the television by any means.", isError: true);
             return false;
         }
 
-        Report($"Sent {sent} Wake-on-LAN packet(s) to {WakeOnLan.FormatMac(mac)}.");
-
-        // Give the set time to wake and Windows time to re-add the HDMI endpoint.
-        DateTimeOffset deadline = DateTimeOffset.Now.AddMilliseconds(_settings.WaitForEndpointMs);
-        while (DateTimeOffset.Now < deadline && !ct.IsCancellationRequested)
+        if (await WaitForOnAsync(TimeSpan.FromMilliseconds(_settings.WaitForEndpointMs), ct).ConfigureAwait(false))
         {
-            if (_endpointPresent())
-            {
-                Report("The television is awake and the HDMI output is back.");
-                return true;
-            }
-
-            await Task.Delay(1000, ct).ConfigureAwait(false);
+            Report(_endpointPresent()
+                ? "The television is awake and the HDMI output is available."
+                : "The television is awake, but it is not showing this PC's input.");
+            return true;
         }
 
         Report(
-            "The television did not come back within the wait period. If it is connected over Wi-Fi, Wake-on-LAN may not be supported at all.",
+            "The television did not wake within the wait period. Check that Network Standby is enabled on the TV.",
             isError: true);
+        return false;
+    }
+
+    /// <summary>
+    /// Polls until the television reports itself on.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not a wait on the audio endpoint: this set keeps the endpoint Active
+    /// while in standby, so waiting on it would return true instantly and report success for
+    /// a television that never woke.
+    /// </remarks>
+    private async Task<bool> WaitForOnAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        DateTimeOffset deadline = DateTimeOffset.Now + timeout;
+
+        while (DateTimeOffset.Now < deadline && !ct.IsCancellationRequested)
+        {
+            await Task.Delay(1500, ct).ConfigureAwait(false);
+
+            _cachedInfo = null;
+            if (await GetPowerStateAsync(ct).ConfigureAwait(false) == DisplayPowerState.On)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
