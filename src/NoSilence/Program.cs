@@ -18,7 +18,20 @@ internal static class Program
     private const int ExitFailure = 1;
 
     [STAThread]
-    private static int Main(string[] args)
+    private static int Main(string[] args) => Run(args);
+
+    /// <summary>
+    /// The real entry point, shared with the console build.
+    /// </summary>
+    /// <remarks>
+    /// A Windows executable can be either GUI-subsystem or console-subsystem, never both.
+    /// The tray app must be the former or it flashes a console window at every logon; the
+    /// diagnostic commands need the latter or their output goes nowhere — a shell does not
+    /// even wait for a GUI process, so <c>--diagnose</c> appears to do nothing at all.
+    /// The answer is two executables over one implementation, which is exactly what
+    /// <c>devenv.exe</c> and <c>devenv.com</c> do.
+    /// </remarks>
+    internal static int Run(string[] args)
     {
         if (!CommandLineOptions.TryParse(args, out CommandLineOptions options, out string? parseError))
         {
@@ -212,12 +225,13 @@ internal static class Program
             Console.WriteLine(new string('-', 78));
             foreach (SnapshotReplayer.Transition transition in result.Transitions)
             {
-                Console.WriteLine($"  {transition.Elapsed:hh\\:mm\\:ss}  {(transition.Silent ? "SILENT" : "PLAYING"),-8} {transition.Reason}");
+                string marker = transition.IsInitial ? "start" : string.Empty;
+                Console.WriteLine($"  {transition.Elapsed:hh\\:mm\\:ss}  {(transition.Silent ? "SILENT" : "PLAYING"),-8} {transition.Reason} {marker}");
             }
         }
 
         Console.WriteLine();
-        Console.WriteLine($"Silent for {result.SilentFor:hh\\:mm\\:ss} ({result.SilentPercent:F0}% of the recording), {result.Transitions.Count} transitions.");
+        Console.WriteLine($"Silent for {result.SilentFor:hh\\:mm\\:ss} ({result.SilentPercent:F0}% of the recording), {result.ChangeCount} change(s) of state.");
 
         if (result.WorstFlapIn30Seconds >= 3)
         {

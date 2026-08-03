@@ -13,7 +13,12 @@ namespace NoSilence.Diagnostics;
 /// </remarks>
 internal static class SnapshotReplayer
 {
-    internal sealed record Transition(DateTimeOffset At, TimeSpan Elapsed, bool Silent, string Reason);
+    /// <param name="IsInitial">
+    /// True for the very first entry, which records the starting state rather than a change.
+    /// Counting it as a transition made a recording that merely went play → silent → play
+    /// report three transitions and trip the flapping warning.
+    /// </param>
+    internal sealed record Transition(DateTimeOffset At, TimeSpan Elapsed, bool Silent, string Reason, bool IsInitial = false);
 
     internal sealed record Result(
         int Snapshots,
@@ -23,16 +28,21 @@ internal static class SnapshotReplayer
     {
         public double SilentPercent => Duration > TimeSpan.Zero ? SilentFor / Duration * 100d : 0d;
 
-        /// <summary>The worst burst of flip-flopping, as transitions within any 30-second span.</summary>
+        /// <summary>Actual changes of state, excluding the initial one.</summary>
+        public int ChangeCount => Transitions.Count(t => !t.IsInitial);
+
+        /// <summary>The worst burst of flip-flopping, as changes within any 30-second span.</summary>
         public int WorstFlapIn30Seconds
         {
             get
             {
+                IReadOnlyList<Transition> changes = [.. Transitions.Where(t => !t.IsInitial)];
                 int worst = 0;
-                for (int i = 0; i < Transitions.Count; i++)
+
+                for (int i = 0; i < changes.Count; i++)
                 {
                     int count = 0;
-                    for (int j = i; j < Transitions.Count && Transitions[j].At - Transitions[i].At <= TimeSpan.FromSeconds(30); j++)
+                    for (int j = i; j < changes.Count && changes[j].At - changes[i].At <= TimeSpan.FromSeconds(30); j++)
                     {
                         count++;
                     }
@@ -67,7 +77,12 @@ internal static class SnapshotReplayer
 
             if (previous != outcome.WantsSilence)
             {
-                transitions.Add(new Transition(snapshot.At, snapshot.At - start.Value, outcome.WantsSilence, outcome.Reason));
+                transitions.Add(new Transition(
+                    snapshot.At,
+                    snapshot.At - start.Value,
+                    outcome.WantsSilence,
+                    outcome.Reason,
+                    IsInitial: previous is null));
 
                 if (outcome.WantsSilence)
                 {

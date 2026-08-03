@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 2.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Work out the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            '${{ github.event.inputs.version }}'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "Building $version"
+
+      - name: Test
+        run: dotnet test NoSilence.sln --configuration Release
+
+      # Self-contained: runs on a machine with no .NET installed, which is what most
+      # people downloading a tray utility actually have.
+      - name: Publish (self-contained)
+        shell: pwsh
+        run: |
+          foreach ($project in 'src/NoSilence/NoSilence.csproj', 'src/NoSilence.Console/NoSilence.Console.csproj') {
+            dotnet publish $project `
+              --configuration Release `
+              --runtime win-x64 `
+              --self-contained true `
+              -p:PublishSingleFile=true `
+              -p:Version=${{ steps.version.outputs.version }} `
+              -p:InformationalVersion=${{ steps.version.outputs.version }}+${{ github.sha }} `
+              --output publish/self-contained
+          }
+
+      # Framework-dependent: a few megabytes instead of a hundred, for anyone who
+      # already has the .NET 9 desktop runtime.
+      - name: Publish (framework-dependent)
+        shell: pwsh
+        run: |
+          foreach ($project in 'src/NoSilence/NoSilence.csproj', 'src/NoSilence.Console/NoSilence.Console.csproj') {
+            dotnet publish $project `
+              --configuration Release `
+              --runtime win-x64 `
+              --self-contained false `
+              -p:PublishSingleFile=true `
+              -p:Version=${{ steps.version.outputs.version }} `
+              -p:InformationalVersion=${{ steps.version.outputs.version }}+${{ github.sha }} `
+              --output publish/framework-dependent
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $v = '${{ steps.version.outputs.version }}'
+
+          Compress-Archive -Path publish/self-contained/*.exe `
+            -DestinationPath "artifacts/NoSilence-$v-win-x64-self-contained.zip"
+          Compress-Archive -Path publish/framework-dependent/*.exe `
+            -DestinationPath "artifacts/NoSilence-$v-win-x64.zip"
+
+          # Checksums, since the binaries are unsigned and SmartScreen will complain.
+          Get-ChildItem artifacts/*.zip | ForEach-Object {
+            "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+
+          Get-Content artifacts/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoSilence-${{ steps.version.outputs.version }}
+          path: artifacts/*
+
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ### Which file
+
+            - **`...-self-contained.zip`** — needs nothing installed. Start here.
+            - **`...win-x64.zip`** — smaller, needs the .NET 9 desktop runtime.
+
+            Each contains `NoSilence.exe` (the tray app) and `NoSilence.Console.exe`
+            (the same program, for commands that print output).
+
+            The binaries are not code-signed, so Windows SmartScreen will warn on first
+            run: *More info → Run anyway*. `SHA256SUMS.txt` is attached.
