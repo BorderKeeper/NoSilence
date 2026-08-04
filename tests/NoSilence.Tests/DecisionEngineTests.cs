@@ -399,6 +399,63 @@ public class DecisionEngineTests
         }
     }
 
+    /// <summary>
+    /// Regression from a real launch: Windows Settings holds a capture session whenever its
+    /// sound page is open, purely to draw a level meter, and silenced the music three
+    /// seconds after startup.
+    /// </summary>
+    [Fact]
+    public void ShellApplicationsHoldingTheMicrophoneDoNotCount()
+    {
+        DetectionConfig config = Config();
+        config.MicrophoneSignal = true;
+
+        foreach (string shell in new[] { "SystemSettings.exe", "explorer.exe", "SearchHost.exe" })
+        {
+            var state = new DecisionState();
+            DateTimeOffset clock = Start;
+            DecisionOutcome outcome = null!;
+
+            for (int i = 0; i < 40; i++)
+            {
+                var snapshot = DetectionSnapshot.Empty(clock) with
+                {
+                    Capture = [Session(shell, -18) with { EndpointName = "Microphone" }],
+                };
+
+                outcome = DecisionEngine.Evaluate(snapshot, config, state);
+                clock = clock.AddMilliseconds(config.PollIntervalMs);
+            }
+
+            Assert.False(outcome.WantsSilence, $"{shell} on the microphone should not silence the music");
+        }
+    }
+
+    /// <summary>A real call still has to work — this must not have disabled the signal.</summary>
+    [Fact]
+    public void ARealApplicationOnTheMicrophoneStillCounts()
+    {
+        DetectionConfig config = Config();
+        config.MicrophoneSignal = true;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+        DecisionOutcome outcome = null!;
+
+        for (int i = 0; i < 40; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Capture = [Session("discord.exe", -18) with { EndpointName = "Microphone" }],
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.True(outcome.WantsSilence);
+    }
+
     [Fact]
     public void FullscreenSignal_CountsOnlyWhenEnabled()
     {

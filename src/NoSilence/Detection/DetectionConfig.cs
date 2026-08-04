@@ -110,7 +110,15 @@ internal sealed class DetectionConfig
     /// </remarks>
     public bool TreatActiveCaptureAsNoise { get; set; }
 
-    /// <summary>Capture sources that never count. Pre-populated but certainly incomplete.</summary>
+    /// <summary>
+    /// Capture sources that never count, on top of anything the rules already ignore.
+    /// </summary>
+    /// <remarks>
+    /// The always-on tools are the well-known trap: OBS, Voicemeeter, NVIDIA Broadcast and
+    /// several headset utilities hold a capture session open permanently. Windows Settings
+    /// is here because its sound page opens one just to draw a level meter, which was
+    /// observed silencing the music within seconds of a real launch.
+    /// </remarks>
     public List<string> MicExclusions { get; set; } =
     [
         "obs64.exe",
@@ -120,6 +128,11 @@ internal sealed class DetectionConfig
         "SteelSeriesSonar*.exe",
         "audiodg.exe",
         "NoSilence.exe",
+        "SystemSettings.exe",
+        "ApplicationFrameHost.exe",
+        "ShellExperienceHost.exe",
+        "SearchHost.exe",
+        "explorer.exe",
     ];
 
     /// <summary>

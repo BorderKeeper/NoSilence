@@ -177,6 +177,19 @@ internal static class DecisionEngine
                 continue;
             }
 
+            // An application we never allow to silence us through its output must not be
+            // able to do so through the microphone either. Windows Settings holds a live
+            // capture session whenever its sound page is open, purely to draw a level
+            // meter — enough, without this, to silence the music for as long as that page
+            // stays open.
+            if (RuleMatcher.Resolve(session, config).Ignored)
+            {
+                contributions.Add(new TriggerContribution(
+                    $"{session.Describe()} (microphone)", "ignored by rule", Counts: false,
+                    session.Dbfs, Rule: "ignored", Endpoint: session.EndpointName));
+                continue;
+            }
+
             SessionStats stats = state.Tracker.Observe(session, micRule, config, snapshot.At);
 
             bool counts = config.TreatActiveCaptureAsNoise
