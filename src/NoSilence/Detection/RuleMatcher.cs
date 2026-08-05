@@ -45,7 +45,12 @@ internal static class RuleMatcher
             _ => rule.MinDurationMs ?? config.MinDurationMs,
         };
 
-        return new ResolvedRule(rule.Mode == RuleMode.Default ? RuleMode.Trigger : rule.Mode, threshold, duration, rule.Match);
+        return new ResolvedRule(
+            rule.Mode == RuleMode.Default ? RuleMode.Trigger : rule.Mode,
+            threshold,
+            duration,
+            rule.Match,
+            rule.CaptureMode);
     }
 
     /// <summary>Case-insensitive match supporting <c>*</c> anywhere, e.g. <c>voicemeeter*.exe</c>.</summary>

@@ -140,6 +140,15 @@ internal static class DecisionEngine
             bool counts = stats.NoisySince is not null;
             triggered |= counts;
 
+            // Audio from the application that is in the call is the other end talking, and it
+            // is what keeps the call alive for someone who sits muted through a whole meeting.
+            // Matched to that application specifically, so a Teams notification cannot quietly
+            // extend a Zoom call that has already finished.
+            if (counts && rule.CaptureMode == CaptureMode.Call && state.IsCallExe(session.ExeName))
+            {
+                state.NoteCallSignal(snapshot.At);
+            }
+
             contributions.Add(new TriggerContribution(
                 session.Describe(),
                 counts
@@ -164,11 +173,13 @@ internal static class DecisionEngine
     {
         if (!config.MicrophoneSignal || snapshot.Capture.Count == 0)
         {
+            state.EndCall();
             return false;
         }
 
         var micRule = new ResolvedRule(RuleMode.Trigger, config.MicThresholdDb, config.MicMinDurationMs, "microphone");
         bool triggered = false;
+        bool callStillOpen = false;
 
         foreach (SessionObservation session in snapshot.Capture)
         {
@@ -182,7 +193,9 @@ internal static class DecisionEngine
             // capture session whenever its sound page is open, purely to draw a level
             // meter — enough, without this, to silence the music for as long as that page
             // stays open.
-            if (RuleMatcher.Resolve(session, config).Ignored)
+            ResolvedRule appRule = RuleMatcher.Resolve(session, config);
+
+            if (appRule.Ignored)
             {
                 contributions.Add(new TriggerContribution(
                     $"{session.Describe()} (microphone)", "ignored by rule", Counts: false,
@@ -192,21 +205,60 @@ internal static class DecisionEngine
 
             SessionStats stats = state.Tracker.Observe(session, micRule, config, snapshot.At);
 
-            bool counts = config.TreatActiveCaptureAsNoise
+            bool speaking = config.TreatActiveCaptureAsNoise
                 ? session.State == SessionActivity.Active
                 : stats.NoisySince is not null;
 
+            // A call is a context, not a sound. Once an application that makes calls has
+            // carried real microphone signal, it holds silence for as long as it keeps the
+            // capture session open — through every pause for breath, which the level test
+            // alone could never do.
+            //
+            // Note what arms it: `speaking` is the exact condition that used to trigger
+            // directly. Nothing new starts ducking here, only the stopping changes. That
+            // asymmetry is deliberate, because the dangerous version of this feature is the
+            // one where a client sitting idle in the tray with an open microphone — OBS,
+            // Voicemeeter, Zoom between meetings — silences the music indefinitely. An idle
+            // microphone carries no sustained signal, so it never arms a call.
+            bool open = appRule.CaptureMode == CaptureMode.Call && session.State == SessionActivity.Active;
+
+            if (open && speaking)
+            {
+                state.BeginCall(session.SessionInstanceId, session.Describe(), session.ExeName);
+                state.NoteCallSignal(snapshot.At);
+            }
+
+            // The hold is bounded. A client that keeps its capture session open after the
+            // meeting ends would otherwise silence the music until it exited, so a call that
+            // has produced nothing from either direction for CallIdleTimeoutMs is over.
+            bool alive = state.CallSignalAt is { } signal
+                && (snapshot.At - signal).TotalMilliseconds <= config.CallIdleTimeoutMs;
+
+            bool holding = open && alive && state.CallSessionId == session.SessionInstanceId;
+            callStillOpen |= holding;
+
+            bool counts = speaking || holding;
             triggered |= counts;
 
             contributions.Add(new TriggerContribution(
                 $"{session.Describe()} (microphone)",
-                counts ? $"in use, peaked at {stats.WindowPeakDb:F1} dBFS" : $"{stats.LastDb:F1} dBFS",
+                counts
+                    ? holding && !speaking ? "in a call" : $"in use, peaked at {stats.WindowPeakDb:F1} dBFS"
+                    : $"{stats.LastDb:F1} dBFS",
                 counts,
                 stats.LastDb,
                 stats.SustainedMs,
-                "microphone",
+                holding ? "call" : "microphone",
                 session.EndpointName,
                 stats.WindowPeakDb));
+        }
+
+        // The call ends when its capture session stops being active or disappears from the
+        // list entirely — the client closed the microphone, which is the one unambiguous
+        // signal that the meeting is over.
+        if (!callStillOpen)
+        {
+            state.EndCall();
         }
 
         return triggered;
@@ -273,6 +325,7 @@ internal static class DecisionEngine
     {
         state.LastTriggerAt = snapshot.At;
         state.SilenceSince ??= snapshot.At;
+        state.LastTriggerWasCall = state.CallApp is not null;
         EnterPhase(state, DecisionPhase.Ducked, snapshot.At);
 
         // Ranked by the level that caused the trigger, not by whatever the newest sample
@@ -283,9 +336,13 @@ internal static class DecisionEngine
             .OrderByDescending(c => c.PeakDbfs ?? c.Dbfs ?? double.MinValue)
             .FirstOrDefault();
 
-        string reason = loudest is null
-            ? "Something else is playing"
-            : $"{loudest.Source}: {loudest.Detail}";
+        // A call names itself. "Zoom.exe (microphone): in use, peaked at -18.2 dBFS" is a true
+        // statement about a sample and a useless one about why the music stopped.
+        string reason = state.CallApp is { } caller
+            ? $"In a call — {caller}"
+            : loudest is null
+                ? "Something else is playing"
+                : $"{loudest.Source}: {loudest.Detail}";
 
         return new DecisionOutcome(true, config.DuckedGain, config.DuckFadeOutMs, DecisionPhase.Ducked, reason, contributions);
     }
@@ -304,12 +361,19 @@ internal static class DecisionEngine
         double quietMs = state.LastTriggerAt is { } last ? (snapshot.At - last).TotalMilliseconds : double.MaxValue;
         double silentMs = state.SilenceSince is { } since ? (snapshot.At - since).TotalMilliseconds : double.MaxValue;
 
+        // A call gets its own, longer release. Reaching here after one means the microphone
+        // has actually closed, and the tail covers a client that reopens it briefly between
+        // meetings. Math.Max so that raising the ordinary release above it still applies.
+        double releaseMs = state.LastTriggerWasCall
+            ? Math.Max(config.CallReleaseMs, config.ReleaseMs)
+            : config.ReleaseMs;
+
         // The grace period stops a single quiet tick immediately after ducking from bouncing
         // the music straight back up. Measured from when silence began, not from the current
         // phase — Ducked and Releasing are one continuous stretch of silence.
-        if (quietMs < config.ReleaseMs || silentMs < config.HardDuckGraceMs)
+        if (quietMs < releaseMs || silentMs < config.HardDuckGraceMs)
         {
-            double remaining = Math.Max(0d, (config.ReleaseMs - quietMs) / 1000d);
+            double remaining = Math.Max(0d, (releaseMs - quietMs) / 1000d);
             EnterPhase(state, DecisionPhase.Releasing, snapshot.At, countTransition: false);
 
             return new DecisionOutcome(

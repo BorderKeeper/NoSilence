@@ -456,6 +456,238 @@ public class DecisionEngineTests
         Assert.True(outcome.WantsSilence);
     }
 
+    /// <summary>Drives the engine with one capture session, returning the final outcome.</summary>
+    private static DecisionOutcome RunCapture(
+        DecisionState state,
+        DetectionConfig config,
+        ref DateTimeOffset clock,
+        int milliseconds,
+        SessionObservation? microphone)
+    {
+        DecisionOutcome outcome = null!;
+        int ticks = Math.Max(1, milliseconds / config.PollIntervalMs);
+
+        for (int i = 0; i < ticks; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Capture = microphone is null ? [] : [microphone],
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// A capture session. The distinct process id matters only to keep its session instance
+    /// id apart from the render one in <see cref="SessionTracker"/>; on a real machine the two
+    /// are different sessions on different endpoints and never collide.
+    /// </summary>
+    private static SessionObservation Microphone(string exe, double dbfs, SessionActivity activity = SessionActivity.Active) =>
+        Session(exe, dbfs, pid: 4243) with { EndpointName = "Microphone", State = activity };
+
+    private static DetectionConfig CallConfig()
+    {
+        DetectionConfig config = Config();
+        config.MicrophoneSignal = true;
+        config.MicMinDurationMs = 3000;
+        config.ReleaseMs = 5000;
+        config.CallReleaseMs = 15000;
+        return config;
+    }
+
+    /// <summary>
+    /// The bug that two days of daily use produced: 352 play/silence flips in one day, almost
+    /// all of them a single Zoom call. The level meter goes quiet every time you stop talking,
+    /// so the ordinary release fired in every pause for breath.
+    /// </summary>
+    [Fact]
+    public void ACallHoldsSilenceThroughEveryPause()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // Someone speaks: this arms the call on exactly the old trigger condition.
+        Assert.True(RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18)).WantsSilence);
+
+        // Now nobody speaks for a full minute, but Zoom keeps the microphone open. Under the
+        // old 5 s release this produced a dozen transitions.
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 60000, Microphone("Zoom.exe", -100));
+
+        Assert.True(outcome.WantsSilence);
+        Assert.Equal(DecisionPhase.Ducked, outcome.Phase);
+        Assert.Equal("In a call — Zoom.exe", outcome.Reason);
+    }
+
+    /// <summary>One transition in, one out. Not twenty.</summary>
+    [Fact]
+    public void ACallProducesExactlyTwoTransitions()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        // Five minutes of alternating speech and silence — a conversation.
+        for (int i = 0; i < 30; i++)
+        {
+            RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+            RunCapture(state, config, ref clock, 6000, Microphone("Zoom.exe", -100));
+        }
+
+        // The meeting ends: Zoom closes the capture session.
+        RunCapture(state, config, ref clock, 20000, null);
+
+        Assert.Equal(2, state.TransitionsThisHour);
+    }
+
+    [Fact]
+    public void ACallReleasesOnlyAfterTheMicrophoneCloses()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+
+        // Zoom drops the capture session. The ordinary 5 s release must not apply.
+        Assert.True(RunCapture(state, config, ref clock, 10000, null).WantsSilence);
+
+        // Past the 15 s call release, the music comes back.
+        Assert.False(RunCapture(state, config, ref clock, 6000, null).WantsSilence);
+    }
+
+    /// <summary>
+    /// The dangerous version of this feature is the one where a conferencing client sitting
+    /// idle in the tray with an open microphone silences the music forever. Arming requires
+    /// real signal, so an idle microphone never starts a call.
+    /// </summary>
+    [Fact]
+    public void AnIdleMicrophoneNeverStartsACall()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 120000, Microphone("Zoom.exe", -100));
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Null(state.CallApp);
+    }
+
+    /// <summary>
+    /// A capture session that is open but not Active is a client that has stopped listening.
+    /// It must not hold the music down.
+    /// </summary>
+    [Fact]
+    public void AnInactiveCaptureSessionEndsTheCall()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+        Assert.NotNull(state.CallApp);
+
+        RunCapture(state, config, ref clock, 1000, Microphone("Zoom.exe", -100, SessionActivity.Inactive));
+        Assert.Null(state.CallApp);
+    }
+
+    /// <summary>
+    /// The safety net. Some clients keep the capture session open after the meeting ends, and
+    /// without a bound "hold while the microphone is open" would mean "hold until the
+    /// application exits" — the music stranded, with no way to tell why.
+    /// </summary>
+    [Fact]
+    public void ACallThatGoesCompletelyDeadIsTreatedAsOver()
+    {
+        DetectionConfig config = CallConfig();
+        config.CallIdleTimeoutMs = 30000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+        Assert.NotNull(state.CallApp);
+
+        // The session stays open and Active, but nothing comes through it at all.
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 60000, Microphone("Zoom.exe", -100));
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Null(state.CallApp);
+    }
+
+    /// <summary>
+    /// A listener who never unmutes still gets a call: the other end's audio is render traffic
+    /// from the same application, and that keeps the hold alive past the idle timeout.
+    /// </summary>
+    [Fact]
+    public void TheOtherEndTalkingKeepsACallAlive()
+    {
+        DetectionConfig config = CallConfig();
+        config.CallIdleTimeoutMs = 30000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+
+        // Two minutes of the microphone carrying nothing, while Zoom itself keeps playing.
+        DecisionOutcome outcome = null!;
+        for (int i = 0; i < 120000 / config.PollIntervalMs; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Render = [Session("Zoom.exe", -12)],
+                Capture = [Microphone("Zoom.exe", -100)],
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.True(outcome.WantsSilence);
+        Assert.Equal("In a call — Zoom.exe", outcome.Reason);
+    }
+
+    /// <summary>
+    /// The longer release belongs to calls alone — a video that was paused must still come
+    /// back after the ordinary five seconds.
+    /// </summary>
+    [Fact]
+    public void OrdinaryNoiseKeepsTheShortRelease()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.True(RunFor(state, config, ref clock, 4000, Session("chrome.exe", -18)).WantsSilence);
+        Assert.False(state.LastTriggerWasCall);
+
+        Assert.False(RunFor(state, config, ref clock, 6000, Session("chrome.exe", -100)).WantsSilence);
+    }
+
+    /// <summary>
+    /// An application with no call rule is still judged on level, so a microphone tool that is
+    /// not a conferencing client cannot latch silence open.
+    /// </summary>
+    [Fact]
+    public void ANonCallApplicationOnTheMicrophoneIsStillJudgedOnLevel()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.True(RunCapture(state, config, ref clock, 4000, Microphone("somerecorder.exe", -18)).WantsSilence);
+        Assert.Null(state.CallApp);
+
+        // Quiet again, and the ordinary release applies rather than the call one.
+        Assert.False(RunCapture(state, config, ref clock, 6000, Microphone("somerecorder.exe", -100)).WantsSilence);
+    }
+
     [Fact]
     public void FullscreenSignal_CountsOnlyWhenEnabled()
     {

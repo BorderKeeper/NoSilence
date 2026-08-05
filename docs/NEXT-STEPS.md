@@ -70,9 +70,13 @@ Worth keeping, because each one cost real debugging time and each is written int
 
 ## Next steps, in order
 
-1. **Live with it.** The most valuable input now is which behaviours irritate you. The release
-   window going 20 s → 5 s came from exactly that and was right.
-2. **Record a normal evening.** Five minutes is enough:
+Step 1 has now happened — two days of daily use, written up as discrete items in
+`docs/BACKLOG.md`. Calls are the one real problem (NS-1 to NS-3); start there.
+
+1. ~~**Live with it.**~~ Done, 4–5 August. The most valuable input was which behaviours
+   irritate, and the answer was unambiguous: 352 play/silence flips in a day, almost all of
+   them a video call being sampled as intermittent noise.
+2. **Record a normal evening** — and now, more urgently, a call. Five minutes is enough:
    `NoSilence.Console.exe --diagnose --seconds 300 --jsonl session.jsonl`, then
    `--replay session.jsonl`. Tuning can then happen against real data without repeating
    anything. Recordings are moved aside rather than overwritten.

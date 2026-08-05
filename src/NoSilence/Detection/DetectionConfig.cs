@@ -63,6 +63,37 @@ internal sealed class DetectionConfig
     /// </remarks>
     public int ReleaseMs { get; set; } = 5000;
 
+    /// <summary>
+    /// Continuous quiet required before the music comes back <em>after a call</em>.
+    /// </summary>
+    /// <remarks>
+    /// Fifteen seconds, against five for everything else, and the reason is that a call is
+    /// not like other noise. It is one continuous context that the level meter samples as a
+    /// string of unrelated bursts, so the ordinary release fires in every pause for breath:
+    /// two days of real use produced 352 play/silence flips in a day, and at 11:04 the music
+    /// came back up for 751 ms in the middle of a meeting.
+    /// <para>
+    /// Most of the work is done by holding silence while the capture session stays open — see
+    /// <see cref="CaptureMode.Call"/> — so this only covers the tail after the microphone
+    /// closes, where a conferencing client can briefly reopen it between meetings.
+    /// </para>
+    /// </remarks>
+    public int CallReleaseMs { get; set; } = 15000;
+
+    /// <summary>
+    /// How long a call may produce nothing at all — no microphone signal, no audio from the
+    /// same application — before it is treated as over.
+    /// </summary>
+    /// <remarks>
+    /// The safety net on the call hold, and the reason it cannot strand the music. Some
+    /// clients keep the capture session open after a meeting ends; without this, "hold while
+    /// the microphone is open" would mean "hold until the application exits". Two minutes of
+    /// complete silence from both directions is not a meeting in progress. A muted listener
+    /// is still covered, because the other end's audio is render traffic from the same
+    /// application and keeps the call alive.
+    /// </remarks>
+    public int CallIdleTimeoutMs { get; set; } = 120000;
+
     /// <summary>Fade down. Fast enough to feel immediate, slow enough not to click.</summary>
     public int DuckFadeOutMs { get; set; } = 400;
 

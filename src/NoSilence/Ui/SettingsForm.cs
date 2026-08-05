@@ -316,9 +316,14 @@ internal sealed class SettingsForm : Form
             v => _app.UpdateDetection(c => c.ReleaseMs = v)));
         layout.Controls.Add(Hint("How long everything must stay quiet before the music comes back. Longer survives ad breaks and pauses; shorter feels more responsive."));
 
+        layout.Controls.Add(Spinner("Wait before resuming after a call (ms)", 0, 300000, config.CallReleaseMs,
+            v => _app.UpdateDetection(c => c.CallReleaseMs = v)));
+        layout.Controls.Add(Hint("Calls get their own, longer wait. While a call is in progress the music stays down the whole time, so this only covers the moments after the microphone closes."));
+
         layout.Controls.Add(Heading("Extra signals"));
         layout.Controls.Add(Check("Go quiet while the microphone is in use", config.MicrophoneSignal,
             v => _app.UpdateDetection(c => c.MicrophoneSignal = v)));
+        layout.Controls.Add(Hint("Conferencing apps hold the music down for the whole call rather than pulsing with whoever is talking. Anything else on the microphone is judged on level."));
         layout.Controls.Add(Check("Go quiet during full-screen games and presentations", config.FullscreenSignal,
             v => _app.UpdateDetection(c => c.FullscreenSignal = v)));
         layout.Controls.Add(Hint("Only catches true exclusive full screen. Most modern games run borderless-windowed and look like ordinary windows, so the per-application audio check is what does the real work."));

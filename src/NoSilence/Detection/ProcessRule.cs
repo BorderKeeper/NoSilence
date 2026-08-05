@@ -33,6 +33,28 @@ internal enum RuleMode
     AlwaysTrigger,
 }
 
+/// <summary>How an application's <em>microphone</em> use is interpreted.</summary>
+internal enum CaptureMode
+{
+    /// <summary>
+    /// Measure the level, like any other source. Right for anything that might open a
+    /// microphone without a conversation attached.
+    /// </summary>
+    Level,
+
+    /// <summary>
+    /// This application makes calls. Sustained microphone signal from it starts a call, and
+    /// silence is then held for as long as it keeps the capture session open.
+    /// </summary>
+    /// <remarks>
+    /// The distinction that matters: a call is a <em>context</em>, not a sound. Measuring the
+    /// level answers "is someone speaking right now", which goes false every time you pause
+    /// for breath. Two days of logs showed the cost — 352 play/silence flips in one day, very
+    /// nearly all of them one Zoom call being sampled as intermittent noise.
+    /// </remarks>
+    Call,
+}
+
 /// <summary>
 /// One entry in the per-application rules table.
 /// </summary>
@@ -51,6 +73,9 @@ internal sealed record ProcessRule(
 {
     /// <summary>True for rules NoSilence ships, so the UI can mark them and offer a restore.</summary>
     public bool BuiltIn { get; init; }
+
+    /// <summary>How this application's microphone use is read. Defaults to plain level.</summary>
+    public CaptureMode CaptureMode { get; init; }
 
     /// <summary>
     /// The rules shipped out of the box. Ordered: the first match wins, so specific entries
@@ -85,14 +110,19 @@ internal sealed record ProcessRule(
         new("OpenConsole.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
         new("WindowsTerminal.exe", RuleMatchKind.ExeName, RuleMode.Ignore) { BuiltIn = true },
 
-        // Chat: pings are ~1 s, calls are continuous.
-        new("discord.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("Teams.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("ms-teams.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("slack.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("Telegram.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("WhatsApp.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
-        new("msedgewebview2.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true },
+        // Chat: pings are ~1 s, calls are continuous. All of these also make calls, so their
+        // microphone use is read as a call context rather than as a level — see CaptureMode.
+        // Zoom was missing entirely until daily use found it, which is why it fell through to
+        // the default rule and was ducking on a 2 s sustain.
+        new("Zoom.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("CptHost.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("discord.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("Teams.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("ms-teams.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("slack.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("Telegram.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("WhatsApp.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
+        new("msedgewebview2.exe", RuleMatchKind.ExeName, RuleMode.Tolerant, MinDurationMs: 4000) { BuiltIn = true, CaptureMode = CaptureMode.Call },
 
         // Browsers: notification blips are under 1.5 s, so 2.5 s separates them from content.
         new("chrome.exe", RuleMatchKind.ExeName, RuleMode.Trigger, MinDurationMs: 2500) { BuiltIn = true },
@@ -112,7 +142,12 @@ internal sealed record ProcessRule(
 }
 
 /// <summary>The rule that applied, with its global defaults already folded in.</summary>
-internal readonly record struct ResolvedRule(RuleMode Mode, double ThresholdDb, int MinDurationMs, string Source)
+internal readonly record struct ResolvedRule(
+    RuleMode Mode,
+    double ThresholdDb,
+    int MinDurationMs,
+    string Source,
+    CaptureMode CaptureMode = CaptureMode.Level)
 {
     public bool Ignored => Mode == RuleMode.Ignore;
 }
