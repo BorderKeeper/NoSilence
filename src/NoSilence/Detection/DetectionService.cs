@@ -27,6 +27,7 @@ internal sealed class DetectionService : IDisposable
     private DetectionConfig _config = new();
     private OverrideState _override = OverrideState.Auto;
     private DecisionOutcome? _last;
+    private ShellActivity _lastShell = ShellActivity.Unknown;
     private bool _disposed;
 
     public DetectionService(
@@ -124,6 +125,21 @@ internal sealed class DetectionService : IDisposable
 
         (bool muted, float volume) = ReadDefaultEndpointVolume();
 
+        ShellActivity shell = _config.FullscreenSignal || _config.FocusAssistSignal
+            ? _signals.ReadShellActivity()
+            : ShellActivity.Unknown;
+
+        // Logged on change because SHQueryUserNotificationState is hard to reason about from
+        // the outside: it reported Busy through nineteen ducks in one ordinary working day,
+        // with nothing obviously full-screen running. Knowing when it flips, and what was in
+        // the foreground at the time, is the only way to find out what is asserting it. It
+        // changes rarely, so this costs a handful of lines a day.
+        if (shell != _lastShell)
+        {
+            _log.LogInformation("Shell activity is now {Shell} (was {Previous}).", shell, _lastShell);
+            _lastShell = shell;
+        }
+
         return new DetectionSnapshot(
             At: DateTimeOffset.Now,
             Render: render,
@@ -131,7 +147,7 @@ internal sealed class DetectionService : IDisposable
             OutputEndpointPresent: true,
             DefaultEndpointMuted: muted,
             DefaultEndpointVolume: volume,
-            Shell: _config.FullscreenSignal || _config.FocusAssistSignal ? _signals.ReadShellActivity() : ShellActivity.Unknown,
+            Shell: shell,
             UserIdle: _config.SilenceWhenIdleMinutes > 0 ? _signals.ReadUserIdle() : TimeSpan.Zero,
             WorkstationLocked: _signals.WorkstationLocked,
             Override: _override);

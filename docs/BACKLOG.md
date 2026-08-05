@@ -327,8 +327,15 @@ that is a guess and needs confirming.
 in NS-7 — `FullScreenD3D` never fired. So `Busy` cannot simply be dropped from the trigger set
 without losing the one case the full-screen signal demonstrably gets right.
 
-**How to investigate.** Log the raw `ShellActivity` value each time it changes, over a normal
-day, and correlate with what was in the foreground. If `Busy` proves to be permanently on
+**How to investigate.** `DetectionService.Capture` now logs the raw `ShellActivity` whenever it
+changes, so the next normal day of use produces the evidence without anyone having to watch for
+it:
+
+```
+[INF] NoSilence.Detection.DetectionService: Shell activity is now Busy (was AcceptsNotifications).
+```
+
+Correlate those lines with what was in the foreground. If `Busy` proves to be permanently on
 because of a background tool, the options are to require it to coincide with a foreground
 window that actually covers a monitor, or to narrow the trigger set to
 `FullScreenD3D | PresentationMode` and accept that borderless games are already handled by the
