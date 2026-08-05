@@ -135,9 +135,16 @@ a call."*
   tray tooltip, the menu's "why" line and the log all take their text from
   `DecisionOutcome.Reason`, so all three changed together.
 - ~~Leaving: capture session closes → hold, then one resume.~~ Done via NS-1.
-- **Still to build:** the escape hatch. A balloon when a call starts, offering *"play anyway"* —
-  the snooze the user is reaching for now, without a duration to guess at. This is the piece
-  that turns it from a heuristic that behaves well into one you can overrule in a click.
+- ~~The escape hatch.~~ Done. `OverrideState.PlayThroughCall`, offered two ways: a **Play
+  through this call** menu item visible only during a call, and a balloon when a call starts
+  whose body is itself the button. It suppresses both the microphone *and* the call
+  application's own audio — suppressing only the microphone would leave the other end talking
+  still ducking the music — and resumes immediately rather than waiting out the release,
+  because an explicit click means now.
+
+  It expires when the call ends, cleared in `DetectionService.Tick`. That is the whole point:
+  an override that outlived its call would be indistinguishable from the microphone signal
+  being switched off, and would be discovered the same way — days later, by accident.
 
 **Acceptance.** A full working day with a call in it produces single-digit transitions and no
 manual snoozes.
@@ -145,6 +152,14 @@ manual snoozes.
 ---
 
 ## NS-4 — The output endpoint gets muted by Windows and only the log finds out
+
+**Done — 5 August, unverified.** `PlaybackEngine.MakeOutputAudible`, reachable from a menu item
+that appears only when it is needed and from clicking the balloon itself.
+
+**Correction to the original write-up below.** It claimed the tray never surfaced this. That was
+wrong: `Apply` already promoted the warning above the phase, set the Error icon, and balloons at
+every notification level. What was actually missing was anywhere to *click* — the fix lives in a
+per-device Windows volume slider most people have never opened. That is what was added.
 
 **Priority: medium.** Happens **daily**, by the user's account.
 
@@ -159,28 +174,29 @@ the morning after PC wakeup."*
     SAMSUNG (NVIDIA High Definition Audio) is muted in Windows, so nothing will be heard.
 ```
 
-The app knew. It said so in a file nobody reads, twelve hours before the user noticed.
+The app knew, twelve hours before the user noticed — but at 21:36 nobody was at the machine to
+see the balloon, and by morning there was nothing left but the icon.
 
-**Diagnosis.** Two things compound. `PlaybackEngine` logs a warning and nothing else reaches
-the UI. And `IgnoreWhenEndpointMuted` (`DetectionConfig.cs:79`) means a muted endpoint makes
-the engine ignore every other application, so the state reads as a healthy `PLAYING` while
-absolutely nothing is audible — the one situation where the tray is confidently wrong.
+**What was built.** A "Make SAMSUNG audible again" item, which clears the mute and lifts a
+near-zero volume to 20%. It appears in the tray menu only while the output is inaudible, and
+the balloon now carries the same action, so the notification you actually see at the moment it
+happens is itself the button.
 
-**Suggested fix.**
+**Still open.**
 
-1. Surface it: distinct tray icon state plus a balloon, *"Your output is muted in Windows"*,
-   with a one-click unmute. `TrayIcons` already has the vocabulary for a warning state.
-2. Consider unmuting automatically when the endpoint is reopened and NoSilence did not mute it
-   itself — behind a setting, defaulting off until it has been watched.
-3. Investigate the cause separately: it correlates with the TV being powered off at night and
-   the HDMI endpoint re-enumerating. If the NVIDIA HDMI endpoint comes back muted after a
-   power cycle, that is worth writing into `TV.md` whatever we do about it.
+1. Unmuting automatically when the endpoint is reopened, behind a setting defaulting to off.
+   Deliberately not done yet: changing system volume without being asked wants watching first.
+2. The cause. It correlates with the TV being powered off at night and the HDMI endpoint
+   re-enumerating. If the NVIDIA HDMI endpoint reliably comes back muted after a power cycle,
+   that belongs in `TV.md` whatever else is done about it.
 
 ---
 
 ## NS-5 — The tray menu takes a visible moment to open
 
-**Priority: medium.** Small, self-contained, good first task.
+**Done — 5 August, unverified.** Both submenus now fill on their own `DropDownOpening` rather
+than when the root menu opens, taking the endpoint enumeration off the path between the
+right-click and the menu appearing.
 
 **Observed.** 12:25, *"right clicking takes time for the menu to open."*
 
@@ -192,13 +208,17 @@ machine has ever seen — on this machine, four `SAMSUNG` endpoints alone, three
 (`NEXT-STEPS.md`, "This machine"). `RefreshTvMenu` then rebuilds the television submenu and
 reads `_tv.Status` on the same thread.
 
-**Suggested fix.** Cache the endpoint list; refresh it from `EndpointNotificationBridge`, which
-already exists for exactly this kind of change, plus a slow timer. Build the device submenu
-from the cache. Move the television submenu's population to its own `DropDownOpening` so it
-costs nothing unless opened.
+**What was built.** The simpler half of the suggested fix, which turned out to be the whole of
+it: both submenus populate on their own `DropDownOpening`. `RefreshMenu` now does nothing more
+expensive than reading a property. Almost nobody opens either submenu, so the enumeration went
+from every right-click to approximately never.
 
-**Acceptance.** Stopwatch around `RefreshMenu`, logged at debug: under 16 ms with the menu
-fully populated.
+Caching the list and refreshing it from `EndpointNotificationBridge` was not done — it only
+buys anything once the submenu is already open, which is now the rare path. Worth revisiting
+only if opening **Output device** itself feels slow.
+
+**Acceptance.** Not yet measured. A stopwatch around `RefreshMenu` logged at debug would
+confirm it; the honest position is that the expensive call is provably no longer on that path.
 
 ---
 
@@ -256,6 +276,10 @@ concept for the opposite direction, the asymmetry is a bit odd.
 ---
 
 ## NS-9 — The flap warning fires into the void
+
+**Done — 5 August, unverified.** `DetectionService.Flapping` is raised alongside the log line
+and `TrayApplicationContext.NotifyFlapping` turns it into a balloon that opens **What's
+playing**. At most one an hour, because that is how often the underlying warning can fire.
 
 **Priority: low. Cheap.**
 

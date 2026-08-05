@@ -108,6 +108,15 @@ While a call is held the tray says **In a call — Zoom** rather than quoting a 
 "peaked at −18.2 dBFS" is a true statement about a sample and a useless one about why the music
 stopped.
 
+**Overruling it.** A balloon when the call starts, and a **Play through this call** item in the
+menu while it lasts. Either one keeps the music up for the rest of that call and then turns
+itself off. It covers the application's own audio as well as the microphone — suppressing only
+the microphone would leave the other end talking still ducking you — and it resumes
+immediately rather than waiting out the release, because you just asked for it by hand.
+
+This replaces reaching for Snooze with a duration guessed in advance, which is what daily use
+showed people actually doing: seven times in two days, always at the start of a meeting.
+
 ## Extra signals, continued
 
 **The full-screen caveat is real.** It uses `SHQueryUserNotificationState`, which is the same

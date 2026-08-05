@@ -34,7 +34,10 @@ internal enum OperatingMode
 /// snooze expiry, which is evaluated from the snapshot's own timestamp and therefore needs
 /// no timer to leak.
 /// </summary>
-internal sealed record OverrideState(OperatingMode Mode = OperatingMode.Auto, DateTimeOffset? SnoozeUntil = null)
+internal sealed record OverrideState(
+    OperatingMode Mode = OperatingMode.Auto,
+    DateTimeOffset? SnoozeUntil = null,
+    bool PlayThroughCall = false)
 {
     public static OverrideState Auto { get; } = new();
 

@@ -249,6 +249,57 @@ internal sealed class PlaybackEngine : IDisposable
         ScheduleReopen(delayMs: 0, "requested by the user");
     });
 
+    /// <summary>
+    /// Clears a Windows mute, or a volume so low nothing could be heard, on the output
+    /// endpoint.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="CheckOutputIsAudible"/> can tell you the room is silent and why, but until
+    /// this existed it could not do anything about it — and the fix is buried in a per-device
+    /// volume slider most people have never opened. Reported daily on the television endpoint,
+    /// which Windows mutes across a power cycle.
+    /// <para>
+    /// Raising a near-zero volume to 20% is a judgement rather than a restoration: the
+    /// previous value is long gone by the time anyone notices. Twenty per cent is audible
+    /// without being a shock.
+    /// </para>
+    /// </remarks>
+    public void MakeOutputAudible() => _engine.Post(() =>
+    {
+        if (_device is null)
+        {
+            _log.LogWarning("Cannot clear the output mute: no device is open.");
+            return;
+        }
+
+        try
+        {
+            AudioEndpointVolume endpoint = _device.AudioEndpointVolume;
+
+            if (endpoint.Mute)
+            {
+                endpoint.Mute = false;
+                _log.LogInformation("Cleared the Windows mute on {Device}.", _deviceName);
+            }
+
+            if (endpoint.MasterVolumeLevelScalar < 0.02f)
+            {
+                endpoint.MasterVolumeLevelScalar = 0.2f;
+                _log.LogInformation("Raised {Device} to 20% in Windows.", _deviceName);
+            }
+        }
+        catch (COMException ex)
+        {
+            _log.LogWarning(ex, "Could not change the output endpoint volume.");
+            return;
+        }
+
+        // Re-check now rather than up to a second from now, so the tray stops saying the
+        // output is inaudible the moment it is not.
+        _nextVolumeCheckAt = 0;
+        CheckOutputIsAudible();
+    });
+
     /// <summary>Drives the state machine and publishes a snapshot. Called from the engine tick.</summary>
     public void Poll()
     {

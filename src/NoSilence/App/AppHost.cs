@@ -82,6 +82,7 @@ internal sealed class AppHost : IDisposable
 
         _detection.Configure(settings.Detection);
         _detection.Decided += OnDecided;
+        _detection.Flapping += OnFlapping;
         _engine.Tick += _detection.Tick;
 
         // An endpoint appearing or disappearing changes which sessions exist, so the cached
@@ -140,6 +141,11 @@ internal sealed class AppHost : IDisposable
     private void OnPlaybackStateChanged(object? sender, PlaybackSnapshot snapshot)
     {
         _ui.Post(() => _tray.Apply(snapshot));
+    }
+
+    private void OnFlapping(object? sender, int transitions)
+    {
+        _ui.Post(() => _tray.NotifyFlapping(transitions));
     }
 
     /// <summary>

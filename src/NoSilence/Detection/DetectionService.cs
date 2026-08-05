@@ -44,6 +44,9 @@ internal sealed class DetectionService : IDisposable
     /// <summary>Raised on the engine thread every tick, with the decision and what produced it.</summary>
     public event EventHandler<(DecisionOutcome Outcome, DetectionSnapshot Snapshot)>? Decided;
 
+    /// <summary>Raised on the engine thread when play/silence has been oscillating.</summary>
+    public event EventHandler<int>? Flapping;
+
     /// <summary>The most recent decision, for the tray and the settings window.</summary>
     public DecisionOutcome? LastOutcome => _last;
 
@@ -79,6 +82,15 @@ internal sealed class DetectionService : IDisposable
         DetectionSnapshot snapshot = Capture();
         DecisionOutcome outcome = DecisionEngine.Evaluate(snapshot, _config, _state);
 
+        // "Play through this call" expires with the call it was aimed at. An override that
+        // outlived its call would be indistinguishable from the microphone signal being
+        // switched off, and would be discovered the same way — days later, by accident.
+        if (_override.PlayThroughCall && _state.CallApp is null)
+        {
+            _override = _override with { PlayThroughCall = false };
+            _log.LogInformation("The call ended, so playing through it has been turned off again.");
+        }
+
         if (_last is null || _last.WantsSilence != outcome.WantsSilence || _last.Phase != outcome.Phase)
         {
             _log.LogInformation("{Summary}", DecisionEngine.Summarise(outcome));
@@ -90,6 +102,11 @@ internal sealed class DetectionService : IDisposable
                 _log.LogWarning(
                     "Play/silence has flipped {Count} times in the last hour, which suggests the detection threshold or a rule needs adjusting. Try --diagnose.",
                     _state.TransitionsThisHour);
+
+                // ...and say so somewhere anyone will see. This warning fired twenty-two times
+                // across two days of real use and was found afterwards, in the log, by someone
+                // going looking for it.
+                Flapping?.Invoke(this, _state.TransitionsThisHour);
             }
         }
 

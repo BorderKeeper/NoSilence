@@ -88,6 +88,20 @@ internal sealed class AppController
     public void CancelSnooze() =>
         _detection.Override = _detection.Override with { SnoozeUntil = null };
 
+    /// <summary>True while a call is holding the music down.</summary>
+    public bool IsInCall => _detection.LastOutcome is { IsCall: true };
+
+    /// <summary>
+    /// Keep playing for the rest of the current call. Turns itself off when the call ends.
+    /// </summary>
+    /// <remarks>
+    /// The alternative to a snooze with a duration guessed in advance, which is what daily
+    /// use showed people actually reaching for — seven times in two days, always at the start
+    /// of a meeting, always for a length nobody could know yet.
+    /// </remarks>
+    public void PlayThroughCall() =>
+        _detection.Override = _detection.Override with { PlayThroughCall = true };
+
     // ---- output device ---------------------------------------------------
 
     /// <summary>
@@ -113,6 +127,9 @@ internal sealed class AppController
     }
 
     public void ReopenDevice() => _playback.ReopenDevice();
+
+    /// <summary>Clears a Windows mute or near-zero volume on the output endpoint.</summary>
+    public void MakeOutputAudible() => _playback.MakeOutputAudible();
 
     public void PlayTestTone(string endpointId) =>
         _playback.PlayTestTone(endpointId, _settings.Current.Output.VolumePercent);

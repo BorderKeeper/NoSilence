@@ -30,6 +30,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private ToolStripMenuItem _header = null!;
     private ToolStripMenuItem _reason = null!;
+    private ToolStripMenuItem _fixOutput = null!;
+    private ToolStripMenuItem _playThroughCall = null!;
     private ToolStripMenuItem _modeMenu = null!;
     private ToolStripMenuItem _snoozeMenu = null!;
     private ToolStripMenuItem _deviceMenu = null!;
@@ -40,6 +42,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private string _tooltip = "NoSilence — starting up";
     private PlaybackSnapshot _snapshot = PlaybackSnapshot.Empty;
     private DateTimeOffset _lastBalloonAt;
+    private Action? _balloonAction;
+    private bool _wasInCall;
     private bool _shuttingDown;
 
     public TrayApplicationContext(AppController app, ILogger<TrayApplicationContext> log)
@@ -59,6 +63,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _notifyIcon.DoubleClick += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         _notifyIcon.MouseUp += OnIconMouseUp;
+        _notifyIcon.BalloonTipClicked += (_, _) => RunBalloonAction();
         _menu.Opening += (_, _) => RefreshMenu();
 
         _messageWindow.ShowSettingsRequested += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
@@ -92,6 +97,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     public void Apply(PlaybackSnapshot snapshot)
     {
         _snapshot = snapshot;
+        NotifyCallStarted();
 
         // An inaudible output outranks whatever the phase says: reporting "Playing" while
         // the room is silent is the least helpful thing the tray could do.
@@ -144,8 +150,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _header = new ToolStripMenuItem("NoSilence") { Enabled = false };
         _reason = new ToolStripMenuItem(string.Empty) { Enabled = false, Available = false };
 
+        // Only ever visible when the output is inaudible, and first in the menu when it is.
+        // Knowing the room is silent is no use without somewhere to click.
+        _fixOutput = Item(string.Empty, () => _app.MakeOutputAudible());
+        _fixOutput.Available = false;
+        _fixOutput.Font = new System.Drawing.Font(_menu.Font, System.Drawing.FontStyle.Bold);
+
+        // Shown only while a call is holding the music down. It expires with the call, which
+        // is the difference between this and the snooze people reach for instead.
+        _playThroughCall = Item("Play through this call", () => _app.PlayThroughCall());
+        _playThroughCall.Available = false;
+
         _menu.Items.Add(_header);
         _menu.Items.Add(_reason);
+        _menu.Items.Add(_fixOutput);
+        _menu.Items.Add(_playThroughCall);
         _menu.Items.Add(new ToolStripSeparator());
 
         _menu.Items.Add(Item("Next track", () => _app.NextTrack()));
@@ -181,10 +200,22 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _menu.Items.Add(new ToolStripSeparator());
 
+        // Both submenus are filled when they are opened, not when the root menu is. Building
+        // them up front put a full COM enumeration of every render endpoint Windows has ever
+        // seen — four of them share one friendly name on the author's machine, three of those
+        // stale — on the UI thread between the right-click and the menu appearing, which was
+        // visible as a lag every single time. Almost nobody opens these.
+        //
+        // The placeholder matters: WinForms raises DropDownOpening only for a submenu that
+        // already has at least one item, and draws no arrow for an empty one.
         _deviceMenu = new ToolStripMenuItem("Output device");
+        _deviceMenu.DropDownItems.Add(Loading());
+        _deviceMenu.DropDownOpening += (_, _) => RefreshDeviceMenu();
         _menu.Items.Add(_deviceMenu);
 
         _tvMenu = new ToolStripMenuItem("Television");
+        _tvMenu.DropDownItems.Add(Loading());
+        _tvMenu.DropDownOpening += (_, _) => RefreshTvMenu();
         _menu.Items.Add(_tvMenu);
 
         _menu.Items.Add(new ToolStripSeparator());
@@ -212,6 +243,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _reason.Text = "    " + decision!.Reason;
         }
 
+        _fixOutput.Available = _snapshot.Warning is not null;
+        if (_fixOutput.Available)
+        {
+            _fixOutput.Text = $"Make {_snapshot.DeviceName ?? "the output"} audible again";
+        }
+
+        _playThroughCall.Available = _app.IsInCall && !_app.Override.PlayThroughCall;
+
         _volume.SetValueQuietly(_app.Settings.Output.VolumePercent);
 
         OverrideState state = _app.Override;
@@ -229,9 +268,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? $"Snooze  (until {state.SnoozeUntil!.Value.LocalDateTime:HH:mm})"
             : "Snooze";
 
-        RefreshDeviceMenu();
-        RefreshTvMenu();
+        // Deliberately not RefreshDeviceMenu/RefreshTvMenu — those run when their own submenu
+        // opens. All that is needed here is whether the television entry appears at all, which
+        // is a property read rather than a device enumeration.
+        _tvMenu.Available = _app.TvControlEnabled;
     }
+
+    private static ToolStripMenuItem Loading() => new("…") { Enabled = false };
 
     /// <summary>
     /// Hidden entirely when no television provider is configured, rather than shown greyed —
@@ -385,11 +428,73 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        ShowBalloon("NoSilence", tooltip.Replace("NoSilence — ", string.Empty, StringComparison.Ordinal),
-            isProblem ? ToolTipIcon.Warning : ToolTipIcon.Info);
+        string message = tooltip.Replace("NoSilence — ", string.Empty, StringComparison.Ordinal);
+
+        // An inaudible output is the one problem the app can fix itself, so say so and make
+        // the balloon the button.
+        if (_snapshot.Warning is not null)
+        {
+            ShowBalloon("NoSilence", $"{message}\r\nClick here to fix it.", ToolTipIcon.Warning,
+                onClick: () => _app.MakeOutputAudible());
+            return;
+        }
+
+        ShowBalloon("NoSilence", message, isProblem ? ToolTipIcon.Warning : ToolTipIcon.Info);
     }
 
-    private void ShowBalloon(string title, string message, ToolTipIcon icon, bool force = false)
+    /// <summary>
+    /// Says that the music has been starting and stopping too much, and opens the live view.
+    /// </summary>
+    /// <remarks>
+    /// Call on the UI thread. The detection service raises this at most once an hour, so it
+    /// needs no rate limiting of its own — and "Why is it silent?" is the right destination,
+    /// because it names every source and its level rather than describing the symptom again.
+    /// </remarks>
+    public void NotifyFlapping(int transitions)
+    {
+        if (_app.Settings.General.Notifications == NotificationLevel.Off)
+        {
+            return;
+        }
+
+        ShowBalloon(
+            "NoSilence",
+            $"The music has started and stopped {transitions} times in the last hour.\r\nClick here to see what keeps triggering it.",
+            ToolTipIcon.Warning,
+            force: true,
+            onClick: () => SettingsRequested?.Invoke(this, ShowLiveViewArgs.Instance));
+    }
+
+    /// <summary>
+    /// One balloon when a call takes the music down, carrying the escape hatch with it.
+    /// </summary>
+    /// <remarks>
+    /// The exception to the "routine ducking never produces a balloon" rule, and it earns the
+    /// exception: a call is the one duck that lasts an hour, and the moment you want to
+    /// overrule it is the moment it starts. Fired on the transition only, so a long meeting
+    /// produces exactly one.
+    /// </remarks>
+    private void NotifyCallStarted()
+    {
+        bool inCall = _app.IsInCall;
+        if (inCall == _wasInCall)
+        {
+            return;
+        }
+
+        _wasInCall = inCall;
+
+        if (!inCall || _app.Settings.General.Notifications == NotificationLevel.Off)
+        {
+            return;
+        }
+
+        string who = _app.LastDecision?.Reason ?? "In a call";
+        ShowBalloon("NoSilence", $"{who}\r\nClick here to play through it.", ToolTipIcon.Info,
+            force: true, onClick: () => _app.PlayThroughCall());
+    }
+
+    private void ShowBalloon(string title, string message, ToolTipIcon icon, bool force = false, Action? onClick = null)
     {
         if (_shuttingDown)
         {
@@ -403,7 +508,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         _lastBalloonAt = DateTimeOffset.Now;
+        _balloonAction = onClick;
         _notifyIcon.ShowBalloonTip(5000, title, message, icon);
+    }
+
+    /// <summary>
+    /// Runs whatever the last balloon offered. Cleared as it runs, so a stray click on a
+    /// balloon that has already been dismissed and replaced cannot fire the old action.
+    /// </summary>
+    private void RunBalloonAction()
+    {
+        Action? action = _balloonAction;
+        _balloonAction = null;
+        action?.Invoke();
     }
 
     // ---- lifetime --------------------------------------------------------

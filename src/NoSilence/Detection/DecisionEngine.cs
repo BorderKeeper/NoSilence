@@ -137,6 +137,17 @@ internal static class DecisionEngine
             // MinDurationMs — so testing SustainedMs against MinDurationMs again here would
             // double-count it and take twice as long to duck as configured. SustainedMs is
             // reported, not re-tested.
+            // "Play through this call" has to cover the application's own audio as well as the
+            // microphone. Suppressing only the microphone would leave the other end talking
+            // still ducking the music, which is not what anyone means by playing through it.
+            if (snapshot.Override.PlayThroughCall && rule.CaptureMode == CaptureMode.Call)
+            {
+                contributions.Add(new TriggerContribution(
+                    session.Describe(), "playing through this call", Counts: false,
+                    stats.LastDb, Rule: rule.Source, Endpoint: session.EndpointName));
+                continue;
+            }
+
             bool counts = stats.NoisySince is not null;
             triggered |= counts;
 
@@ -237,14 +248,21 @@ internal static class DecisionEngine
             bool holding = open && alive && state.CallSessionId == session.SessionInstanceId;
             callStillOpen |= holding;
 
-            bool counts = speaking || holding;
+            // Note that the call is still tracked while it is being played through — arming
+            // and holding both continue. That is what lets the override expire on its own when
+            // the call ends, rather than being left on for the next one.
+            bool suppressed = snapshot.Override.PlayThroughCall && appRule.CaptureMode == CaptureMode.Call;
+
+            bool counts = !suppressed && (speaking || holding);
             triggered |= counts;
 
             contributions.Add(new TriggerContribution(
                 $"{session.Describe()} (microphone)",
-                counts
-                    ? holding && !speaking ? "in a call" : $"in use, peaked at {stats.WindowPeakDb:F1} dBFS"
-                    : $"{stats.LastDb:F1} dBFS",
+                suppressed
+                    ? "playing through this call"
+                    : counts
+                        ? holding && !speaking ? "in a call" : $"in use, peaked at {stats.WindowPeakDb:F1} dBFS"
+                        : $"{stats.LastDb:F1} dBFS",
                 counts,
                 stats.LastDb,
                 stats.SustainedMs,
@@ -325,7 +343,9 @@ internal static class DecisionEngine
     {
         state.LastTriggerAt = snapshot.At;
         state.SilenceSince ??= snapshot.At;
-        state.LastTriggerWasCall = state.CallApp is not null;
+        // A duck that happened *while* a call was being played through was caused by something
+        // else entirely, so it must not inherit the call's longer release.
+        state.LastTriggerWasCall = state.CallApp is not null && !snapshot.Override.PlayThroughCall;
         EnterPhase(state, DecisionPhase.Ducked, snapshot.At);
 
         // Ranked by the level that caused the trigger, not by whatever the newest sample
@@ -344,7 +364,10 @@ internal static class DecisionEngine
                 ? "Something else is playing"
                 : $"{loudest.Source}: {loudest.Detail}";
 
-        return new DecisionOutcome(true, config.DuckedGain, config.DuckFadeOutMs, DecisionPhase.Ducked, reason, contributions);
+        return new DecisionOutcome(true, config.DuckedGain, config.DuckFadeOutMs, DecisionPhase.Ducked, reason, contributions)
+        {
+            IsCall = state.CallApp is not null,
+        };
     }
 
     private static DecisionOutcome MaybeRelease(
@@ -356,6 +379,15 @@ internal static class DecisionEngine
         if (state.Phase is DecisionPhase.Playing)
         {
             return Play(state, snapshot, config, "Nothing else is playing", contributions);
+        }
+
+        // An explicit "play through this call" is a request for music now, not in fifteen
+        // seconds. The release window exists to absorb gaps in someone else's audio and has
+        // nothing to say about a decision the user just made by hand. Reaching here at all
+        // means nothing else is triggering, so there is nothing to hold out for.
+        if (snapshot.Override.PlayThroughCall)
+        {
+            return Play(state, snapshot, config, "Playing through the call", contributions);
         }
 
         double quietMs = state.LastTriggerAt is { } last ? (snapshot.At - last).TotalMilliseconds : double.MaxValue;

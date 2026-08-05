@@ -44,4 +44,13 @@ internal sealed record DecisionOutcome(
 {
     /// <summary>Seconds of continuous quiet still required before music returns. Null unless releasing.</summary>
     public double? ResumesInSeconds { get; init; }
+
+    /// <summary>
+    /// True while a call is holding the music down, so the UI can offer to play through it.
+    /// </summary>
+    /// <remarks>
+    /// A flag rather than something parsed back out of <see cref="Reason"/>, because a UI that
+    /// pattern-matches on a human-readable sentence breaks the moment the sentence is reworded.
+    /// </remarks>
+    public bool IsCall { get; init; }
 }

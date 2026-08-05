@@ -597,6 +597,84 @@ public class DecisionEngineTests
     }
 
     /// <summary>
+    /// "Play through this call" has to cover the application's own audio too. Suppressing only
+    /// the microphone would leave the other end talking still ducking the music, which is not
+    /// what anyone means by playing through it.
+    /// </summary>
+    [Fact]
+    public void PlayingThroughACallCoversBothDirections()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+
+        var playing = new OverrideState(PlayThroughCall: true);
+        DecisionOutcome outcome = null!;
+
+        for (int i = 0; i < 40; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Render = [Session("Zoom.exe", -12)],
+                Capture = [Microphone("Zoom.exe", -18)],
+                Override = playing,
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.False(outcome.WantsSilence);
+
+        // The call is still tracked while it is played through — that is what lets the
+        // override expire on its own rather than leaking into the next call.
+        Assert.NotNull(state.CallApp);
+    }
+
+    /// <summary>Playing through a call must not make everything else inaudible too.</summary>
+    [Fact]
+    public void PlayingThroughACallStillDucksForOtherApplications()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+
+        var playing = new OverrideState(PlayThroughCall: true);
+        DecisionOutcome outcome = null!;
+
+        for (int i = 0; i < 40; i++)
+        {
+            var snapshot = DetectionSnapshot.Empty(clock) with
+            {
+                Render = [Session("chrome.exe", -12, pid: 99)],
+                Capture = [Microphone("Zoom.exe", -18)],
+                Override = playing,
+            };
+
+            outcome = DecisionEngine.Evaluate(snapshot, config, state);
+            clock = clock.AddMilliseconds(config.PollIntervalMs);
+        }
+
+        Assert.True(outcome.WantsSilence);
+    }
+
+    /// <summary>The flag the UI keys off, so it never has to parse the reason sentence.</summary>
+    [Fact]
+    public void ACallIsFlaggedOnTheOutcome()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        Assert.True(RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18)).IsCall);
+        Assert.False(RunFor(new DecisionState(), config, ref clock, 4000, Session("chrome.exe", -18)).IsCall);
+    }
+
+    /// <summary>
     /// The safety net. Some clients keep the capture session open after the meeting ends, and
     /// without a bound "hold while the microphone is open" would mean "hold until the
     /// application exits" — the music stranded, with no way to tell why.
