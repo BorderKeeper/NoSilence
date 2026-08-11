@@ -182,10 +182,25 @@ near-zero volume to 20%. It appears in the tray menu only while the output is in
 the balloon now carries the same action, so the notification you actually see at the moment it
 happens is itself the button.
 
+**Automatic unmuting — done 7 August, verified on hardware 11 August.** The set had been left
+muted again overnight (`09:05:30 [WRN] … is muted in Windows`); the next launch logged
+`09:39:19.671 Cleared the Windows mute on SAMSUNG (the output device was just opened)` and the
+warning did not return. Asked for directly: *"unmute the source if it's muted on startup"*. `Output.MakeAudibleOnOpen`, on by default, reversing the "defaulting to
+off" position below — the ask is the authorisation, and a daily fault that the app can already
+detect and already knows how to fix is a poor thing to make somebody click.
+
+It fires as the device is opened rather than at launch, which is a superset of what was asked:
+the endpoint is reopened after a TV power cycle and after a machine resume, and those are the
+moments the mute actually appears. Never while the device is running — muting the output during
+playback is a deliberate act and has to stick, which is the whole reason this is safe to do
+without asking.
+
 **Still open.**
 
-1. Unmuting automatically when the endpoint is reopened, behind a setting defaulting to off.
-   Deliberately not done yet: changing system volume without being asked wants watching first.
+1. ~~Unmuting automatically when the endpoint is reopened, behind a setting defaulting to off.
+   Deliberately not done yet: changing system volume without being asked wants watching first.~~
+   Done, and defaulting to on. Watch the log for `Cleared the Windows mute on … (the output
+   device was just opened)` and check it never appears when the mute was meant.
 2. The cause. It correlates with the TV being powered off at night and the HDMI endpoint
    re-enumerating. If the NVIDIA HDMI endpoint reliably comes back muted after a power cycle,
    that belongs in `TV.md` whatever else is done about it.
@@ -264,6 +279,12 @@ borderless-window caveat, while true, is not the whole story.
 
 ## NS-8 — Television was off in the morning
 
+**Done — 7 August. Verified on hardware 11 August 09:39: 28 seconds from launch to a television
+that was off being on, nobody touching anything.** `TvPolicyConfig.WakeAtStartup`, on by default,
+and the wake happens rather than being offered. The same run proved the power query was necessary:
+the set answered `Standby` while Windows had the endpoint present and the app was already
+"playing" into it, which is exactly the condition that made the first version do nothing.
+
 **Priority: low. Needs a decision more than code.**
 
 09:21, *"TV was off, I turned it off, so I turned it back on."* Automatic TV wake and sleep are
@@ -272,6 +293,52 @@ off by default (`NEXT-STEPS.md:69`), so this is the configured behaviour, not a 
 The decision: should playback starting after a machine wake offer to turn the television on —
 a balloon with an action rather than doing it silently? Given `TvPolicy` already has a user-veto
 concept for the opposite direction, the asymmetry is a bit odd.
+
+**How it was decided.** Asked for directly — *"the app should turn the target audio output on (if
+it's a TV for example) … on startup"* — so it acts rather than offering. A balloon would have put
+a click between the user and the thing they had just said they wanted, every single morning.
+
+**What was built.** For five minutes after launch the two-minute wants-to-play requirement drops
+to fifteen seconds, and it applies independently of `WakeEnabled`. That independence is the
+substantive decision: continuous automatic waking is what people leave off, because it can act at
+any moment of the day and a power command is not a small thing. A single attempt bounded to the
+minutes after launch is predictable, and it is what "turn it on when I sit down" actually means.
+The user veto is what keeps NS-8's own scenario — *"I turned it off, so…"* — from being
+re-litigated at the next logon: switch the set off by hand and a restart inside the hour changes
+nothing.
+
+Fifteen seconds rather than zero, because the output endpoint takes a moment to open, so for the
+first seconds after launch a television that is already on still reads as off — and because a
+machine that comes up into a call has nothing to play and should turn nothing on.
+
+**The bug this nearly shipped with.** The first version was unreachable on the only machine it
+matters on, and today's log is the proof. At 12:36:05 NoSilence started; at 12:36:06 it was
+"Playing to SAMSUNG"; at 12:36:25 the user clicked **Turn on** and the set answered *standby*.
+The HDMI endpoint was Active for a television that was asleep — the `KEY_POWEROFF` quirk in
+`TV.md`, exactly as documented — and `ShouldWake` refuses to act while the endpoint is present.
+The feature would have done nothing, every morning, silently.
+
+So the policy now takes an optional `ReportedPower`, and `TvService.AskTheTelevisionOnce` fills
+it with one power query at launch, for providers that can answer. Only during the startup window:
+the endpoint remains the sensor for the continuous rule, where it is free and conservative, and
+polling a set all day to make waking it easier is the wrong trade. `wol` and `shell` without a
+state command derive their answer from the endpoint anyway, so for them nothing changes.
+
+Worth remembering as a pattern: the two facts that killed the first attempt were both already
+written down in `TV.md`, and neither was noticed until the log was read.
+
+**Fixed on the way past.** `WantsToPlaySince` and `IdleSince` were being persisted with the rest
+of `TvPolicyState`, so a timestamp from the previous run could satisfy the two-minute rule on the
+very first tick after launch — a power command before anything at all had been observed.
+`TvPolicy.BeginSession` now clears both, and `TvService.Configure` calls it.
+
+**Known wrinkle, not addressed.** `IDisplayController.WakeAsync` returns `true` both for "we
+turned it on" and for "it was already on", and `TvService` records `WeWokeIt` from that. A set
+that is on but showing another input has no HDMI endpoint, so the policy will attempt a wake,
+the controller will correctly send nothing — and `WeWokeIt` becomes true for a television nobody
+here woke. It only matters if `SleepEnabled` is also on, which is off by default, but the fix is
+a three-valued wake result (`Woken` / `AlreadyOn` / `Failed`) across the four controllers.
+Pre-existing; the startup wake makes it easier to reach.
 
 ---
 
@@ -345,6 +412,48 @@ per-application audio check.
 permanently. It does not count, because it is judged on level and reads −100 dBFS — a live
 demonstration of why the call latch in NS-2 arms on signal rather than on an open microphone.
 Leave it out of `MicExclusions`: Steam has voice chat, so level is the right test for it.
+
+## NS-12 — Waking the PC did not wake the television, two mornings running
+
+**Done — 11 August, unverified.** Reported: *"When I wake the PC from sleep two days in a row the
+TV did not turn on. Are the events coming in properly?"* The answer turned out to be no, and for a
+more interesting reason than expected.
+
+**What the evidence said.** Five separate reasons, each sufficient on its own:
+
+1. **The running app predated the feature.** Process 33492 started 7 August 12:36:03 from a binary
+   dated 4 August, and was still running on 11 August. NS-8's startup wake had never executed once.
+2. **A wake is not a launch.** `_startedAt` was set in `TvService.Configure`, at launch only. The
+   app runs for weeks; the startup window had closed on 7 August and could not reopen.
+3. **`PowerModeChanged` has never fired.** `grep -c "Resumed from sleep" *.log` returns 0 for all
+   seven log files. `PlaybackEngine`'s resume path has therefore never run either, which also
+   settles the "sleep/resume recovery: not verified" item in `NEXT-STEPS.md` — it is not that it
+   was not verified, it is that the event never arrives.
+4. **The machine does not suspend.** The System log has no `Kernel-Power` 42/107 pair since
+   8 August. What it has is `Kernel-Power 187` — a user-mode process called `SetSuspendState` —
+   followed by `Kernel-Power 59 — "The system is entering Away Mode"`, at 9 Aug 21:22:08 and
+   10 Aug 20:48:23, matching NoSilence's own endpoint lines to the second. Away Mode keeps running
+   with the display off. There is no resume, so no resume notification, and **an ETW listener on
+   the kernel power provider would have heard nothing either** — worth knowing, since that was the
+   suggested fix.
+5. **The endpoint flap vetoed waking anyway.** 10 Aug 09:24:46 endpoint present → 09:24:48
+   Unplugged → 09:24:48 *"Television wake paused until 10:24 (you turned it off)"* → 09:24:51
+   present again. A two-second flap bought an hour of not waking, every morning, and would have
+   defeated the startup wake even if everything above had worked.
+
+**What was built.** `WakeWatch`, which treats a wake as a launch and finds it from three polled
+signals rather than one notification: a wall-clock gap between ticks (real suspend), the endpoint
+returning after hours (television off overnight), and input after fifteen minutes of silence (Away
+Mode, where neither of the others has an edge). `PowerModeChanged` is still wired up for machines
+where it works. Ten tests, and the two that matter are drawn from the logs above.
+
+Also: the manual-power-off veto now waits fifteen seconds for the endpoint loss to persist before
+believing it, which is the delayed-confirmation shape used in the reporter's own
+`PowerEventTraceProvider` example for the same reason.
+
+**Acceptance.** Sleep the machine overnight with the set off; in the morning the television comes
+on without being asked, and the log names the signal that noticed. Not yet observed — the fix has
+never met a morning.
 
 ## NS-10 — Record a call before tuning anything
 

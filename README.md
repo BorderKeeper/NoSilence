@@ -14,6 +14,11 @@ It lives in the system tray and is meant to be forgotten about.
 4. **Output** — pick the device to play on. **Play a test tone** confirms you have the right
    one; if the target is a television, it also tells you whether it is on the right input.
 
+Every device carries its own Windows volume, and a television's habitually comes back muted
+after the set has been switched off, which makes the app report *Playing* into a silent room. So
+a mute — or a volume below 2% — is cleared as NoSilence opens the device. Muting it while the
+music is playing still means what you meant by it.
+
 That is the whole setup. Everything else has sensible defaults.
 
 There is no installer and the binary is not code-signed, so SmartScreen will warn on first
@@ -44,6 +49,10 @@ recording of your own machine rather than by guessing.
 Optional and off by default — see [docs/TV.md](docs/TV.md). A PC graphics card cannot send
 HDMI-CEC, so this happens over the network: Wake-on-LAN, the Samsung remote protocol, or any
 command you care to configure.
+
+Once a television is configured, NoSilence turns it on shortly after it starts, so logging on is
+enough to get the room going. Unless you switched the set off by hand within the last hour, in
+which case it leaves it alone.
 
 ## Two executables
 

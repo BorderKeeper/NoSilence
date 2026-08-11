@@ -17,11 +17,47 @@ internal sealed record TvPolicyInput(
     bool LibraryHasTracks,
     OperatingMode Mode,
     bool Snoozed,
-    DisplayCapabilities Capabilities);
+    DisplayCapabilities Capabilities,
+    DateTimeOffset StartedAt,
+    DisplayPowerState? ReportedPower = null);
 
 internal sealed class TvPolicyConfig
 {
     public bool WakeEnabled { get; set; }
+
+    /// <summary>
+    /// Turn the television on shortly after NoSilence starts, without waiting out
+    /// <see cref="RequireWantsToPlayForMs"/> and without <see cref="WakeEnabled"/>.
+    /// </summary>
+    /// <remarks>
+    /// A launch is not the "brief gap between videos" the two-minute rule exists to survive,
+    /// so measuring one with the other only delays the obvious: the machine has just come up,
+    /// there is music to play and the set is off.
+    /// <para>
+    /// Independent of <see cref="WakeEnabled"/> on purpose. Continuous automatic waking is the
+    /// thing people leave off because it can act at any moment; a single attempt bounded to
+    /// the first few minutes after launch is predictable, and it is what "turn the TV on when
+    /// I sit down" actually asks for. Every other guard still applies — the user veto included,
+    /// so switching the set off by hand and restarting NoSilence does not turn it back on.
+    /// </para>
+    /// </remarks>
+    public bool WakeAtStartup { get; set; } = true;
+
+    /// <summary>How long after launch still counts as starting up.</summary>
+    /// <remarks>
+    /// Five minutes, which is also the cooldown, so the startup path gets one attempt rather
+    /// than a series of them.
+    /// </remarks>
+    public int StartupWindowMs { get; set; } = 300000;
+
+    /// <summary>The shortened <see cref="RequireWantsToPlayForMs"/> used inside that window.</summary>
+    /// <remarks>
+    /// Not zero. The output endpoint takes a moment to open, so for the first seconds after
+    /// launch a television that is already on still looks off — and if the machine came up
+    /// into a call or a game, the engine stops wanting to play and no wake should happen at
+    /// all.
+    /// </remarks>
+    public int StartupWakeAfterMs { get; set; } = 15000;
 
     /// <summary>
     /// How long the engine must continuously want to play before the TV is woken.
@@ -118,14 +154,32 @@ internal static class TvPolicy
 
     private static bool ShouldWake(TvPolicyInput input, TvPolicyConfig config, TvPolicyState state)
     {
-        if (!config.WakeEnabled || !input.Capabilities.HasFlag(DisplayCapabilities.Wake))
+        if (!input.Capabilities.HasFlag(DisplayCapabilities.Wake))
         {
             return false;
         }
 
-        // If the endpoint is already there, the TV is on and there is nothing to do. Never
-        // send a power command that disagrees with what the endpoint is telling us.
-        if (input.OutputEndpointPresent || !input.LibraryHasTracks)
+        bool atStartup = config.WakeAtStartup
+            && (input.Now - input.StartedAt).TotalMilliseconds < config.StartupWindowMs;
+
+        if (!config.WakeEnabled && !atStartup)
+        {
+            return false;
+        }
+
+        // The audio endpoint is the free "is it on?" sensor, and normally the only one: never
+        // send a power command that disagrees with it. But it is not reliable — a standby
+        // entered with KEY_POWEROFF leaves the HDMI link asserted, so Windows keeps the
+        // endpoint Active while the screen is dark, and this machine's television does exactly
+        // that. Where the set has been asked directly, its own answer wins.
+        bool believedOn = input.ReportedPower switch
+        {
+            DisplayPowerState.On => true,
+            DisplayPowerState.Standby or DisplayPowerState.Off => false,
+            _ => input.OutputEndpointPresent,
+        };
+
+        if (believedOn || !input.LibraryHasTracks)
         {
             return false;
         }
@@ -135,7 +189,11 @@ internal static class TvPolicy
             return false;
         }
 
-        if (state.WantsToPlaySince is not { } since || (input.Now - since).TotalMilliseconds < config.RequireWantsToPlayForMs)
+        int requiredMs = atStartup
+            ? Math.Min(config.RequireWantsToPlayForMs, config.StartupWakeAfterMs)
+            : config.RequireWantsToPlayForMs;
+
+        if (state.WantsToPlaySince is not { } since || (input.Now - since).TotalMilliseconds < requiredMs)
         {
             return false;
         }
@@ -209,6 +267,22 @@ internal static class TvPolicy
 
     /// <summary>Clears the veto — the user explicitly asked for a wake.</summary>
     public static void ClearVeto(TvPolicyState state) => state.UserVetoUntil = null;
+
+    /// <summary>
+    /// Drops the two timers that only mean anything within one run of the app.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TvPolicyState.WantsToPlaySince"/> and <see cref="TvPolicyState.IdleSince"/>
+    /// are observations of the current session that happen to be serialised alongside the
+    /// bookkeeping that genuinely has to survive a restart. Left in place, a timestamp from
+    /// yesterday satisfies the wait-before-waking rule on the very first tick after launch,
+    /// which is both surprising and impossible to reason about.
+    /// </remarks>
+    public static void BeginSession(TvPolicyState state)
+    {
+        state.WantsToPlaySince = null;
+        state.IdleSince = null;
+    }
 
     private static void PruneCommandHistory(DateTimeOffset now, TvPolicyState state)
     {

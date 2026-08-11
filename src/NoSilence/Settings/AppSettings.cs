@@ -113,6 +113,22 @@ internal sealed class OutputSettings
     /// little power for an instant resume.
     /// </summary>
     public bool KeepStreamOpenWhileDucked { get; set; } = true;
+
+    /// <summary>
+    /// Clear a Windows mute, or a volume so low nothing could be heard, on the output endpoint
+    /// as it is opened.
+    /// </summary>
+    /// <remarks>
+    /// On, because the failure it fixes is both invisible and daily: Windows brings the
+    /// television's HDMI endpoint back muted after the set has been switched off overnight, and
+    /// then the app reports "Playing" into a silent room. Nothing else routes audio to that
+    /// endpoint, so nobody discovers its volume slider by accident.
+    /// <para>
+    /// Only ever as the device is opened, never while it is running — muting the output while
+    /// the music plays is a deliberate act and must stick.
+    /// </para>
+    /// </remarks>
+    public bool MakeAudibleOnOpen { get; set; } = true;
 }
 
 internal sealed class GeneralSettings

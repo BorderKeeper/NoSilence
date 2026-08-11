@@ -23,12 +23,25 @@ values that differ from the defaults, so improved defaults still reach it.
 - Ducking: a separate process at −30 dBFS silenced the music 1.5 s later, correctly
   attributed, and it resumed 20.2 s after that process stopped (release was 20 s then).
 - Waking the television: `standby → on` in about two seconds.
+- **The startup sequence, end to end, 11 August 09:39.** One launch produced, unattended: the
+  Windows mute cleared as the device opened (`09:39:19.671`); the set asked and answering
+  `Standby` while Windows had the endpoint present and the app was "playing" into it
+  (`09:39:20.051`) — the trap that made the first version of this a no-op; the wake fired at
+  fifteen seconds (`09:39:35.225`); Wake-on-LAN ignored as always, `KEY_POWER` sent, and *"The
+  television is awake and the HDMI output is available"* at `09:39:47.509`. **28 seconds from
+  launch to a television that was off being on.**
 - Published single-file binaries run, including `--help` and `--replay`.
 
 ## Not verified
 
-- **Sleep/resume recovery.** `PowerModeChanged` → teardown → 3 s settle → reopen is written
-  and never exercised. Needs the machine actually suspended.
+- **Waking the television after the machine comes back** (NS-12). The three `WakeWatch` signals
+  are unit tested but none has met a real morning. The launch path they share is now proven (see
+  below), so what is left unverified is only the detection of the wake itself.
+- **Sleep/resume recovery.** ~~`PowerModeChanged` → teardown → 3 s settle → reopen is written
+  and never exercised. Needs the machine actually suspended.~~ Now answered, 11 August: the event
+  **never arrives on this machine**, because its nightly "sleep" is Away Mode rather than a
+  suspend, so that code path has never run and recovery has been happening by accident via
+  endpoint notifications. See NS-12; `WakeWatch` no longer depends on it.
 - **CI and the release workflow.** Cannot run GitHub Actions locally. First push or tag proves it.
 - **A real tag build.** `release.yml` has never produced a release.
 

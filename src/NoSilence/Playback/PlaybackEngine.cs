@@ -124,6 +124,16 @@ internal sealed class PlaybackEngine : IDisposable
     /// <summary>Raised when the output device opens successfully.</summary>
     public event EventHandler? OutputDeviceAcquired;
 
+    /// <summary>
+    /// Raised when Windows reports a resume from sleep.
+    /// </summary>
+    /// <remarks>
+    /// Worth having and not worth relying on. This has never fired on the development machine:
+    /// its nightly "sleep" is Away Mode, which never suspends and therefore never resumes. See
+    /// <see cref="Tv.WakeWatch"/> for the signals that do work.
+    /// </remarks>
+    public event EventHandler? Resumed;
+
     public PlaybackSnapshot Snapshot => new(
         _phase,
         _playlist.CurrentTrack,
@@ -272,6 +282,25 @@ internal sealed class PlaybackEngine : IDisposable
             return;
         }
 
+        MakeAudible("you asked");
+
+        // Re-check now rather than up to a second from now, so the tray stops saying the
+        // output is inaudible the moment it is not.
+        _nextVolumeCheckAt = 0;
+        CheckOutputIsAudible();
+    });
+
+    /// <summary>
+    /// The mute-clearing itself. Engine thread only, and silent when there is nothing wrong.
+    /// </summary>
+    /// <param name="trigger">Why it happened, for the log — this changes system volume.</param>
+    private void MakeAudible(string trigger)
+    {
+        if (_device is null)
+        {
+            return;
+        }
+
         try
         {
             AudioEndpointVolume endpoint = _device.AudioEndpointVolume;
@@ -279,26 +308,20 @@ internal sealed class PlaybackEngine : IDisposable
             if (endpoint.Mute)
             {
                 endpoint.Mute = false;
-                _log.LogInformation("Cleared the Windows mute on {Device}.", _deviceName);
+                _log.LogInformation("Cleared the Windows mute on {Device} ({Trigger}).", _deviceName, trigger);
             }
 
             if (endpoint.MasterVolumeLevelScalar < 0.02f)
             {
                 endpoint.MasterVolumeLevelScalar = 0.2f;
-                _log.LogInformation("Raised {Device} to 20% in Windows.", _deviceName);
+                _log.LogInformation("Raised {Device} to 20% in Windows ({Trigger}).", _deviceName, trigger);
             }
         }
         catch (COMException ex)
         {
             _log.LogWarning(ex, "Could not change the output endpoint volume.");
-            return;
         }
-
-        // Re-check now rather than up to a second from now, so the tray stops saying the
-        // output is inaudible the moment it is not.
-        _nextVolumeCheckAt = 0;
-        CheckOutputIsAudible();
-    });
+    }
 
     /// <summary>Drives the state machine and publishes a snapshot. Called from the engine tick.</summary>
     public void Poll()
@@ -506,6 +529,18 @@ internal sealed class PlaybackEngine : IDisposable
             _outputState = OutputState.Running;
             _retry.Reset();
 
+            // Opening the device is the one moment where clearing a mute is unambiguous: the
+            // endpoint is being taken into use now, so a mute left on it is a leftover rather
+            // than someone asking for quiet. The television's HDMI endpoint comes back muted
+            // after the set has been switched off, and this is where that gets undone.
+            if (_settings.MakeAudibleOnOpen)
+            {
+                MakeAudible("the output device was just opened");
+            }
+
+            // Any warning still showing belongs to the device we are replacing.
+            _nextVolumeCheckAt = 0;
+
             SetPhase(_ducking.TargetGain > 0.001f ? PlaybackPhase.Playing : PlaybackPhase.Ducked, null);
             _log.LogInformation("Playing to {Device} at {Latency} ms.", _deviceName, _settings.LatencyMs);
             OutputDeviceAcquired?.Invoke(this, EventArgs.Empty);
@@ -610,6 +645,7 @@ internal sealed class PlaybackEngine : IDisposable
             _log.LogInformation("Resumed from sleep; rebuilding the output device.");
             _retry.Reset();
             ScheduleReopen(_retry.ResumeSettleMs, "resumed from sleep");
+            Resumed?.Invoke(this, EventArgs.Empty);
         });
     }
 

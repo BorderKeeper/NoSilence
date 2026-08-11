@@ -1,7 +1,12 @@
 # Turning the television on
 
-Optional, and off by default. Nothing touches your television unless you configure it and tick
-the boxes.
+Optional, and off by default: with no provider configured nothing here runs at all, and nothing
+touches your television until you have pointed NoSilence at one.
+
+Once you have, there is one thing it does without being asked further — **it turns the set on
+shortly after NoSilence starts**, if there is music to play and the set is off. See
+[When it decides to act](#when-it-decides-to-act); the checkbox is *Turn the television on when
+NoSilence starts*. Everything else waits for a box to be ticked.
 
 ## Why this is harder than it should be
 
@@ -82,6 +87,19 @@ PowerState: standby                   (the television)
 The television's own report therefore wins, and the endpoint is consulted only when the set
 reports nothing useful or cannot be reached.
 
+This is also why the startup wake asks the set directly. The policy's normal power sensor is the
+endpoint — free, instant, and consulted four times a second — and on this hardware it says
+"present" for a television that is fast asleep, which would leave the one wake worth sending
+permanently blocked. So at launch NoSilence makes a single request for the real answer:
+
+```
+[INF] NoSilence.Tv.TvService: The television reports standby at startup.
+```
+
+Once per run, only while starting up, and only for a provider that can answer. If the request
+fails the endpoint is used as before. Polling the television all day would be the wrong trade;
+asking it once, at the only moment it changes a decision, is not.
+
 ## When it decides to act
 
 Waking requires **all** of: it is enabled, the television is believed off, the library is not
@@ -92,9 +110,71 @@ commands have been sent in the last hour.
 The two-minute requirement exists so a brief gap between videos can never power-cycle a
 television. The hourly cap is a hard circuit breaker.
 
+### Starting up — and waking up — are the exception
+
+For the first five minutes after NoSilence launches **or after the machine comes back**, the
+two-minute requirement drops to fifteen seconds, and it applies whether or not automatic waking is
+switched on. Sitting down at a machine that has just come up is not the "brief gap between videos"
+the long wait exists to survive, so measuring one with the other only makes you wait for something
+obvious.
+
+### Noticing that the machine came back
+
+Windows has a resume notification, `PowerModeChanged`. It is subscribed to, and on the machine
+this was written on it has **never once fired** — seven days of logs, several nights, not one
+"Resumed from sleep". The System event log says why: there are no `Kernel-Power` 42/107
+suspend/resume pairs at all, only
+
+```
+Kernel-Power 59 — The system is entering Away Mode.
+```
+
+In Away Mode the machine does not suspend. It keeps running with the display and audio switched
+off, so there is no resume to be notified about — and an ETW listener watching the kernel power
+provider for suspend/resume events would hear exactly as much as we did, which is nothing.
+
+So three signals are watched instead, any of which counts as a wake, all of them polled from
+state the tick already has:
+
+| Signal | Catches | Threshold |
+|---|---|---|
+| The wall clock jumped between ticks | A real S3 suspend or hibernate — the process was frozen | 90 s |
+| The output endpoint returned | The television, and with it the HDMI endpoint, had been gone for hours | 5 min away |
+| Input arrived after a long silence | Away Mode, where neither of the above has an edge to offer | 15 min idle |
+
+Plus `PowerModeChanged` itself, which costs nothing to keep for the machines where it does work.
+The log names whichever one fired:
+
+```
+[INF] NoSilence.Tv.TvService: The machine is back (input arrived after a long silence);
+      the television gets another look.
+```
+
+The third one is the loose one: it fires when somebody returns to the desk, whether or not the
+machine slept. That is deliberate — on hardware that enters Away Mode it is the only edge there
+is — and the consequences are bounded by everything else in this section: the set is asked whether
+it is already on, and told to turn on only if it is off and there is music waiting.
+
+Every other guard still holds, and the important one is the veto: **if you turned the television
+off by hand less than an hour ago, restarting NoSilence — or logging on again — will not turn it
+back on.** That state is persisted for exactly this reason. Nor will it act if the machine came
+up into a call or a game, because then nothing wants to play.
+
+The window is five minutes, the same as the cooldown between power commands, so this is one
+attempt rather than a series of them. Look for `Waking the television (at startup)` in the log;
+the ordinary rule says `(automatically)` and the tray's own button says `(on request)`.
+
+Turn it off with *Turn the television on when NoSilence starts* if you would rather decide for
+yourself each time — the Television submenu's **Turn on** is always there.
+
 **If you switch the television off by hand, NoSilence stops trying for an hour.** It detects
 this by noticing the audio endpoint disappear when it did not ask for that. Without the rule the
 two of you end up fighting over the television. Asking it to wake explicitly clears the veto.
+
+The loss has to **last fifteen seconds** before it counts. The endpoint flaps — it goes Unplugged
+and comes back within a second or two whenever the set changes state, three times in one recorded
+morning — and every one of those flaps used to be filed as "you turned it off", which then
+suppressed waking for the next hour. A pause before believing it fixes that.
 
 Turning the set off is off by default, and when enabled it will only ever power down a
 television it turned on itself.

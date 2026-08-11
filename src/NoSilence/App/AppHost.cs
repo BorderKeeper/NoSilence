@@ -94,6 +94,10 @@ internal sealed class AppHost : IDisposable
             _tv.NoteOutputDeviceLost();
         };
 
+        // One of three ways the television service hears about a wake, and the only one that
+        // depends on Windows telling us. The other two are polled — see WakeWatch.
+        _playback.Resumed += (_, _) => _tv.NoteResumedFromSleep();
+
         _state.Load();
         _tv.Configure(
             endpointPresent: () => _playback.HasOutputDevice,

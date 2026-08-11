@@ -11,6 +11,12 @@ public class TvPolicyTests
 {
     private static readonly DateTimeOffset Start = new(2026, 8, 2, 12, 0, 0, TimeSpan.Zero);
 
+    /// <summary>
+    /// Long enough before <see cref="Start"/> that the default input is in steady state. The
+    /// startup rule is a separate set of tests and must not leak into the others.
+    /// </summary>
+    private static readonly DateTimeOffset LaunchedLongAgo = Start.AddHours(-1);
+
     private static TvPolicyConfig Config() => new()
     {
         WakeEnabled = true,
@@ -21,6 +27,9 @@ public class TvPolicyTests
         UserVetoMinutes = 60,
         SleepAfterMs = 1800000,
         OnlySleepIfWeWokeIt = true,
+        WakeAtStartup = true,
+        StartupWindowMs = 300000,
+        StartupWakeAfterMs = 15000,
     };
 
     private static TvPolicyInput Input(
@@ -30,8 +39,10 @@ public class TvPolicyTests
         bool library = true,
         OperatingMode mode = OperatingMode.Auto,
         bool snoozed = false,
-        DisplayCapabilities capabilities = DisplayCapabilities.Wake | DisplayCapabilities.Sleep) =>
-        new(now, wantsToPlay, endpointPresent, library, mode, snoozed, capabilities);
+        DisplayCapabilities capabilities = DisplayCapabilities.Wake | DisplayCapabilities.Sleep,
+        DateTimeOffset? startedAt = null,
+        DisplayPowerState? reportedPower = null) =>
+        new(now, wantsToPlay, endpointPresent, library, mode, snoozed, capabilities, startedAt ?? LaunchedLongAgo, reportedPower);
 
     /// <summary>Runs the policy forward in one-minute steps and returns the first action taken.</summary>
     private static (TvAction Action, DateTimeOffset At) RunUntilAction(
@@ -205,7 +216,8 @@ public class TvPolicyTests
         Assert.Equal(TvAction.None, action);
 
         // Past the hour, normal behaviour resumes.
-        var later = new TvPolicyInput(Start.AddMinutes(61), true, false, true, OperatingMode.Auto, false, DisplayCapabilities.Wake);
+        var later = new TvPolicyInput(
+            Start.AddMinutes(61), true, false, true, OperatingMode.Auto, false, DisplayCapabilities.Wake, LaunchedLongAgo);
         TvPolicy.Decide(later, config, state);
         Assert.Equal(TvAction.Wake, TvPolicy.Decide(
             later with { Now = Start.AddMinutes(64) }, config, state));
@@ -289,5 +301,194 @@ public class TvPolicyTests
 
         Assert.Equal(TvAction.None, TvPolicy.Decide(
             Input(Start.AddMinutes(35), wantsToPlay: false, endpointPresent: true), config, state));
+    }
+
+    // ---- starting up -----------------------------------------------------
+
+    /// <summary>
+    /// The two-minute rule guards against a gap between videos. A launch is not one, so
+    /// sitting down at a machine that has just come up does not mean waiting it out.
+    /// </summary>
+    [Fact]
+    public void WakesSoonAfterStartupWithoutTheFullWait()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start, startedAt: Start), config, state));
+        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start.AddSeconds(10), startedAt: Start), config, state));
+        Assert.Equal(TvAction.Wake, TvPolicy.Decide(Input(Start.AddSeconds(20), startedAt: Start), config, state));
+    }
+
+    /// <summary>
+    /// Deliberately independent of <see cref="TvPolicyConfig.WakeEnabled"/>: one attempt at
+    /// launch is predictable in a way that waking at any moment of the day is not.
+    /// </summary>
+    [Fact]
+    public void WakesAtStartupEvenWhenAutomaticWakingIsOff()
+    {
+        TvPolicyConfig config = Config();
+        config.WakeEnabled = false;
+        var state = new TvPolicyState();
+
+        TvPolicy.Decide(Input(Start, startedAt: Start), config, state);
+
+        Assert.Equal(TvAction.Wake, TvPolicy.Decide(Input(Start.AddSeconds(20), startedAt: Start), config, state));
+    }
+
+    [Fact]
+    public void TheStartupWakeCanBeTurnedOff()
+    {
+        TvPolicyConfig config = Config();
+        config.WakeAtStartup = false;
+        var state = new TvPolicyState();
+
+        TvPolicy.Decide(Input(Start, startedAt: Start), config, state);
+
+        // Back to the ordinary rule, which is nowhere near satisfied twenty seconds in.
+        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start.AddSeconds(20), startedAt: Start), config, state));
+    }
+
+    /// <summary>Once the window has passed, only the ordinary rule is left.</summary>
+    [Fact]
+    public void TheStartupWakeStopsAtTheEndOfTheWindow()
+    {
+        TvPolicyConfig config = Config();
+        config.WakeEnabled = false;
+        var state = new TvPolicyState();
+
+        for (int minute = 6; minute <= 30; minute++)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddMinutes(minute), startedAt: Start), config, state));
+        }
+    }
+
+    /// <summary>
+    /// The rule that matters most here. Switching the set off by hand and then restarting
+    /// NoSilence — or having it restart at the next logon — must not turn it back on, and the
+    /// veto is persisted precisely so that it survives that.
+    /// </summary>
+    [Fact]
+    public void TheStartupWakeStillRespectsAManualPowerOff()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState { UserVetoUntil = Start.AddMinutes(50) };
+
+        for (int i = 0; i <= 5; i++)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddMinutes(i), startedAt: Start), config, state));
+        }
+    }
+
+    /// <summary>
+    /// A machine that comes up into a call or a game has nothing to play, so there is nothing
+    /// to turn a television on for.
+    /// </summary>
+    [Fact]
+    public void TheStartupWakeWaitsForSomethingToPlay()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        for (int i = 0; i <= 60; i += 10)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddSeconds(i), wantsToPlay: false, startedAt: Start), config, state));
+        }
+
+        // The call ends inside the window: the shortened wait starts from there, not from launch.
+        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start.AddSeconds(65), startedAt: Start), config, state));
+        Assert.Equal(TvAction.Wake, TvPolicy.Decide(Input(Start.AddSeconds(85), startedAt: Start), config, state));
+    }
+
+    /// <summary>The television is already on, which is the whole reason to trust the endpoint.</summary>
+    [Fact]
+    public void NeverWakesAtStartupWhenTheOutputEndpointIsAlreadyPresent()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        for (int i = 0; i <= 120; i += 20)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddSeconds(i), endpointPresent: true, startedAt: Start), config, state));
+        }
+    }
+
+    /// <summary>
+    /// The case this was written for, taken from a real log: the set was in standby at 12:36
+    /// while Windows still had the HDMI endpoint Active and NoSilence was happily "playing" to
+    /// it. Trusting the endpoint means never waking the television that needed waking.
+    /// </summary>
+    [Fact]
+    public void TheTelevisionsOwnReportOutranksTheAudioEndpoint()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        TvPolicy.Decide(
+            Input(Start, endpointPresent: true, startedAt: Start, reportedPower: DisplayPowerState.Standby),
+            config,
+            state);
+
+        Assert.Equal(TvAction.Wake, TvPolicy.Decide(
+            Input(Start.AddSeconds(20), endpointPresent: true, startedAt: Start, reportedPower: DisplayPowerState.Standby),
+            config,
+            state));
+    }
+
+    /// <summary>
+    /// A set that is on but showing a games console has no HDMI endpoint for this PC. Its own
+    /// report is what stops a power command being sent into that.
+    /// </summary>
+    [Fact]
+    public void ATelevisionThatSaysItIsOnIsLeftAlone()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        for (int i = 0; i <= 120; i += 20)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddSeconds(i), startedAt: Start, reportedPower: DisplayPowerState.On),
+                config,
+                state));
+        }
+    }
+
+    [Fact]
+    public void AnUnreachableTelevisionFallsBackToTheAudioEndpoint()
+    {
+        TvPolicyConfig config = Config();
+        var state = new TvPolicyState();
+
+        for (int i = 0; i <= 120; i += 20)
+        {
+            Assert.Equal(TvAction.None, TvPolicy.Decide(
+                Input(Start.AddSeconds(i), endpointPresent: true, startedAt: Start, reportedPower: DisplayPowerState.Unreachable),
+                config,
+                state));
+        }
+    }
+
+    /// <summary>
+    /// The persisted state carries a "wanting to play since" from the previous run. Left
+    /// alone it satisfies the two-minute rule on the first tick after launch, which would
+    /// send a power command before anything had been observed at all.
+    /// </summary>
+    [Fact]
+    public void ATimerFromTheLastRunDoesNotCountTowardsTheWait()
+    {
+        TvPolicyConfig config = Config();
+        config.WakeAtStartup = false;
+        var state = new TvPolicyState { WantsToPlaySince = Start.AddHours(-5), IdleSince = Start.AddHours(-5) };
+
+        TvPolicy.BeginSession(state);
+
+        Assert.Null(state.WantsToPlaySince);
+        Assert.Null(state.IdleSince);
+        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start, startedAt: Start), config, state));
     }
 }

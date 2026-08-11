@@ -230,6 +230,13 @@ internal sealed class SettingsForm : Form
         layout.Controls.Add(Spinner("Volume (%)", 0, 100, _app.Settings.Output.VolumePercent, v => _app.SetVolume(v)));
         layout.Controls.Add(Spinner("Buffer (ms)", 50, 1000, _app.Settings.Output.LatencyMs, v => _app.UpdateOutput(o => o.LatencyMs = v)));
 
+        layout.Controls.Add(Check("Unmute this device in Windows when it is opened", _app.Settings.Output.MakeAudibleOnOpen,
+            v => _app.UpdateOutput(o => o.MakeAudibleOnOpen = v)));
+        layout.Controls.Add(Hint(
+            "Every device has its own Windows volume, and a television's comes back muted after the set has been off. " +
+            "This clears that as the device is opened — and raises a volume below 2% to 20% — so the app cannot end up " +
+            "reporting \"Playing\" into a silent room. Muting it while the music is playing still sticks."));
+
         page.Controls.Add(layout);
         return page;
     }
@@ -411,6 +418,16 @@ internal sealed class SettingsForm : Form
         layout.Controls.Add(_tvStatus);
 
         layout.Controls.Add(Heading("When to do it automatically"));
+
+        layout.Controls.Add(Check("Turn the television on when NoSilence starts, and when the PC wakes", tv.Policy.WakeAtStartup,
+            v => _app.UpdateTv(t => t.Policy.WakeAtStartup = v)));
+        layout.Controls.Add(Hint(
+            "One attempt, in the first few minutes after launching or waking, once there is music to play — so sitting " +
+            "down at the machine gets the room going without waiting out the delay below. A wake is noticed from the " +
+            "clock, the output device returning, or your first keypress after a long silence, because Windows' own " +
+            "resume notification does not always arrive. If you switched the television off by hand less than an hour " +
+            "ago it stays off."));
+
         layout.Controls.Add(Check("Turn the television on when there is music to play", tv.Policy.WakeEnabled,
             v => _app.UpdateTv(t => t.Policy.WakeEnabled = v)));
         layout.Controls.Add(Spinner("…after wanting to play for (seconds)", 10, 3600, tv.Policy.RequireWantsToPlayForMs / 1000,
