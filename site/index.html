@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NoSilence — music for the quiet, and only the quiet</title>
+<meta name="description" content="NoSilence plays your music on a second audio output — a TV, a spare speaker — but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out. A free Windows tray app.">
+<link rel="icon" href="favicon.ico" sizes="any">
+<meta property="og:title" content="NoSilence">
+<meta property="og:description" content="Plays music on a second audio output, but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
+<meta property="og:type" content="website">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg:        #f6f7f9;
+  --bg-panel:  #ffffff;
+  --bg-sunken: #eceef2;
+  --line:      #dfe3ea;
+  --ink:       #14171c;
+  --ink-soft:  #4d5666;
+  --ink-faint: #7b8697;
+  --accent:    #2f6fe0;
+  --accent-ink:#ffffff;
+  --amber:     #d69300;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #101317;
+    --bg-panel:  #171b21;
+    --bg-sunken: #0b0d10;
+    --line:      #262c35;
+    --ink:       #e8ecf2;
+    --ink-soft:  #a7b1c0;
+    --ink-faint: #6d788a;
+    --accent:    #5c9bff;
+    --accent-ink:#0b1220;
+    --amber:     #e8b12a;
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { width: 100%; max-width: 62rem; margin: 0 auto; padding: 0 1.5rem; }
+a { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 3px; }
+a:hover { text-decoration-color: currentColor; }
+h1, h2, h3 { line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
+p { margin: 0 0 1.1rem; }
+code, kbd { font-family: var(--mono); font-size: 0.88em; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s;
+}
+header.scrolled { border-bottom-color: var(--line); }
+.nav { display: flex; align-items: center; gap: 1.5rem; height: 4rem; }
+.brand { display: flex; align-items: center; gap: .6rem; font-weight: 650; letter-spacing: -0.02em; color: var(--ink); text-decoration: none; margin-right: auto; }
+.brand svg { width: 1.5rem; height: 1.5rem; color: var(--accent); }
+.nav a.navlink { color: var(--ink-soft); text-decoration: none; font-size: .94rem; }
+.nav a.navlink:hover { color: var(--ink); }
+@media (max-width: 34rem) { .nav a.navlink { display: none; } }
+
+/* ---------- hero ---------- */
+.hero { padding: 5rem 0 3.5rem; }
+.hero-note { width: 3.75rem; height: 3.75rem; color: var(--accent); display: block; margin-bottom: 1.75rem; }
+.hero h1 { font-size: clamp(2.6rem, 7vw, 4rem); font-weight: 700; margin-bottom: 1.1rem; }
+.lede { font-size: clamp(1.12rem, 2.4vw, 1.3rem); color: var(--ink-soft); max-width: 34em; margin-bottom: 1rem; }
+.lede strong { color: var(--ink); font-weight: 600; }
+.tray-line { color: var(--ink-faint); font-size: 1rem; max-width: 34em; margin-bottom: 2.25rem; }
+
+.cta { display: flex; flex-wrap: wrap; align-items: center; gap: .85rem 1.25rem; }
+.btn {
+  display: inline-flex; align-items: center; gap: .55rem;
+  background: var(--accent); color: var(--accent-ink);
+  font-weight: 600; font-size: 1rem;
+  padding: .72rem 1.35rem; border-radius: .55rem;
+  text-decoration: none; border: 1px solid transparent;
+  transition: filter .15s, transform .15s;
+}
+.btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.btn svg { width: 1.05rem; height: 1.05rem; }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn-ghost:hover { background: var(--bg-panel); filter: none; }
+.meta { color: var(--ink-faint); font-size: .9rem; }
+.meta code { color: var(--ink-soft); }
+
+/* ---------- timeline diagram ---------- */
+.demo {
+  margin: 3.5rem 0 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: .9rem;
+  padding: 1.5rem 1.5rem 1.25rem;
+}
+.demo-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.demo-head h3 { font-size: .95rem; font-weight: 600; }
+.demo-head span { font-size: .85rem; color: var(--ink-faint); }
+.demo svg { display: block; width: 100%; height: auto; overflow: visible; }
+.tl-label { font: 600 11px var(--sans); fill: var(--ink-faint); letter-spacing: .04em; text-transform: uppercase; }
+.tl-tick  { font: 500 10.5px var(--mono); fill: var(--ink-faint); }
+.tl-note  { font: 500 11.5px var(--sans); fill: var(--ink-soft); }
+
+/* ---------- sections ---------- */
+section { padding: 4.5rem 0; border-top: 1px solid var(--line); }
+section > .wrap > h2 { font-size: clamp(1.6rem, 3.4vw, 2.1rem); font-weight: 680; margin-bottom: .75rem; }
+.section-lede { color: var(--ink-soft); max-width: 40em; margin-bottom: 2.5rem; }
+
+/* min() in the track minimum, or auto-fit refuses to shrink below it and overflows. */
+.grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); align-items: start; }
+.card { background: var(--bg-panel); border: 1px solid var(--line); border-radius: .8rem; padding: 1.4rem 1.5rem; }
+.card h3 { font-size: 1.05rem; font-weight: 620; margin-bottom: .5rem; }
+.card p { color: var(--ink-soft); font-size: .97rem; margin-bottom: 0; }
+.card p + p { margin-top: .7rem; }
+
+/* per-application rules — a two-column list, so the timing never gets squeezed out */
+.rules-card { margin-top: 1.25rem; }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(23rem, 100%), 1fr)); gap: 0 3rem; margin-top: 1.25rem; }
+.rules > div {
+  display: flex; align-items: baseline; gap: 1rem;
+  padding: .7rem 0; border-top: 1px solid var(--line);
+}
+.rules b { font-weight: 600; color: var(--ink); font-size: .97rem; }
+.rules span { color: var(--ink-faint); font-size: .9rem; }
+.rules em {
+  margin-left: auto; font-style: normal; font-family: var(--mono);
+  font-size: .85rem; color: var(--accent); white-space: nowrap;
+}
+
+/* steps */
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; max-width: 44em; }
+ol.steps li { counter-increment: s; position: relative; padding: 0 0 1.4rem 3rem; }
+ol.steps li::before {
+  content: counter(s);
+  position: absolute; left: 0; top: -.1rem;
+  width: 1.95rem; height: 1.95rem; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--bg-sunken); border: 1px solid var(--line);
+  font-size: .85rem; font-weight: 650; color: var(--ink-soft);
+}
+ol.steps li:not(:last-child)::after {
+  content: ""; position: absolute; left: .95rem; top: 2.1rem; bottom: .35rem;
+  width: 1px; background: var(--line);
+}
+ol.steps strong { font-weight: 620; }
+ol.steps p { color: var(--ink-soft); font-size: .95rem; margin: .3rem 0 0; }
+
+/* terminal block */
+.term {
+  background: var(--bg-sunken); border: 1px solid var(--line); border-radius: .7rem;
+  padding: 1.15rem 1.35rem; overflow-x: auto; font-family: var(--mono);
+  font-size: .855rem; line-height: 1.9; color: var(--ink-soft);
+  margin: 0; white-space: pre;
+}
+.term .cmd { color: var(--ink); }
+.term .cmt { color: var(--ink-faint); }
+
+.callout {
+  border-left: 3px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  padding: .95rem 1.25rem; border-radius: 0 .5rem .5rem 0;
+  color: var(--ink-soft); font-size: .95rem; margin: 2rem 0 0; max-width: 44em;
+}
+.callout p:last-child { margin-bottom: 0; }
+.callout strong { color: var(--ink); }
+
+footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: .92rem; }
+.footer-row { display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; align-items: center; }
+.footer-row a { color: var(--ink-soft); text-decoration: none; }
+.footer-row a:hover { color: var(--ink); text-decoration: underline; }
+.footer-row .spacer { margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<header id="hdr">
+  <div class="wrap nav">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="M63 6c17 11 27 21 25 39-4-12-14-18-25-22z"/><rect x="54" y="6" width="9" height="68" rx="2.5"/><ellipse cx="37" cy="76" rx="21" ry="15.5" transform="rotate(-18 37 76)"/></svg>
+      NoSilence
+    </a>
+    <a class="navlink" href="#how">How it works</a>
+    <a class="navlink" href="#setup">Setup</a>
+    <a class="navlink" href="#tv">Television</a>
+    <a class="navlink" href="https://github.com/BorderKeeper/NoSilence">GitHub</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <div class="wrap hero">
+    <svg class="hero-note" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="M63 6c17 11 27 21 25 39-4-12-14-18-25-22z"/><rect x="54" y="6" width="9" height="68" rx="2.5"/><ellipse cx="37" cy="76" rx="21" ry="15.5" transform="rotate(-18 37 76)"/></svg>
+
+    <h1>Music for the quiet,<br>and only the quiet.</h1>
+
+    <p class="lede">
+      NoSilence plays your own music on a <strong>second audio output</strong> — a television, a
+      spare speaker — but only while your PC is otherwise silent. Start a game, a video or a
+      call and it fades out. Stop, and it fades back in.
+    </p>
+    <p class="tray-line">
+      It lives in the system tray and is meant to be forgotten about.
+    </p>
+
+    <div class="cta">
+      <a class="btn" id="dl" href="https://github.com/BorderKeeper/NoSilence/releases/latest">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 12.5a.75.75 0 0 1 .75.75v.25h9v-.25a.75.75 0 0 1 1.5 0v.5A1.25 1.25 0 0 1 12.75 15h-9.5A1.25 1.25 0 0 1 2 13.75v-.5a.75.75 0 0 1 .75-.75Z"/></svg>
+        <span id="dl-text">Download for Windows</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/BorderKeeper/NoSilence">View on GitHub</a>
+      <span class="meta" id="dl-meta">Windows 10/11 · 64-bit · free and open source</span>
+    </div>
+
+    <!-- What actually happens, on a timeline -->
+    <div class="demo">
+      <div class="demo-head">
+        <h3>What happens when something else makes a sound</h3>
+        <span>default timings, all adjustable</span>
+      </div>
+      <svg viewBox="0 0 720 168" role="img" aria-label="Timeline: a game starts making sound; after two seconds of sustained noise the music fades out; when the game stops, five seconds of quiet pass and the music fades back in.">
+        <defs>
+          <!-- currentColor does not inherit into <defs>, so name the token outright. -->
+          <linearGradient id="fadeOut" x1="0" x2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".55"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".05"/></linearGradient>
+          <linearGradient id="fadeIn"  x1="0" x2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".05"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".55"/></linearGradient>
+        </defs>
+
+        <!-- row 1: the other application -->
+        <text class="tl-label" x="0" y="14">A game, a video, a call</text>
+        <rect x="0" y="26" width="720" height="26" rx="4" fill="var(--bg-sunken)"/>
+        <rect x="150" y="26" width="330" height="26" rx="4" fill="var(--amber)" opacity=".85"/>
+        <!-- Amber is mid-tone in both themes, so this label is dark in both. -->
+        <text class="tl-note" x="162" y="44" fill="#2b1d00" style="font-weight:600">above −50 dBFS</text>
+
+        <!-- row 2: the music -->
+        <text class="tl-label" x="0" y="90">Your music</text>
+        <g color="var(--accent)">
+          <rect x="0" y="102" width="720" height="26" rx="4" fill="var(--bg-sunken)"/>
+          <rect x="0"   y="102" width="212" height="26" fill="currentColor" opacity=".55"/>
+          <rect x="212" y="102" width="46"  height="26" fill="url(#fadeOut)"/>
+          <rect x="480" y="102" width="46"  height="26" fill="url(#fadeIn)"/>
+          <rect x="526" y="102" width="194" height="26" fill="currentColor" opacity=".55"/>
+          <rect x="0" y="102" width="720" height="26" rx="4" fill="none" stroke="var(--line)"/>
+        </g>
+
+        <!-- markers -->
+        <g stroke="var(--ink-faint)" stroke-dasharray="3 3" opacity=".7">
+          <line x1="150" y1="26" x2="150" y2="140"/>
+          <line x1="212" y1="52" x2="212" y2="140"/>
+          <line x1="480" y1="26" x2="480" y2="140"/>
+          <line x1="526" y1="52" x2="526" y2="140"/>
+        </g>
+        <text class="tl-tick" x="150" y="156" text-anchor="middle">sound starts</text>
+        <text class="tl-tick" x="215" y="156" text-anchor="start">+2 s → fade out</text>
+        <text class="tl-tick" x="478" y="156" text-anchor="end">sound stops</text>
+        <text class="tl-tick" x="530" y="156" text-anchor="start">+5 s → fade in</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ================= HOW ================= -->
+  <section id="how">
+    <div class="wrap">
+      <h2>How it decides to go quiet</h2>
+      <p class="section-lede">
+        It enumerates Windows audio sessions <strong>per process</strong>, so it knows <em>which
+        application</em> is making sound rather than merely that something is.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>It knows itself</h3>
+          <p>
+            Its own playback is excluded by process ID. That is why the music output is allowed
+            to be the very device you are listening on — it never ducks itself into silence.
+          </p>
+        </div>
+        <div class="card">
+          <h3>A chime is not a film</h3>
+          <p>
+            A source must stay above about −50 dBFS for two full seconds before anything fades.
+            Notification chimes last about one. Without that requirement, a single Discord ping
+            would buy you a stretch of silence.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Tunable against your own machine</h3>
+          <p>
+            Record five minutes of a normal evening, then replay it through different settings
+            until it behaves. Tuning happens against real data rather than by guessing.
+          </p>
+          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/DETECTION.md">Read the detection notes →</a></p>
+        </div>
+      </div>
+
+      <div class="card rules-card">
+        <h3>Per-application rules</h3>
+        <p>
+          Different software deserves different patience. Right-click any row in
+          <strong>What's playing</strong> to change how an application is treated.
+        </p>
+        <div class="rules">
+          <div><b>Chat clients</b> <span>a ping is short, a call is not</span> <em>4 s</em></div>
+          <div><b>Browsers</b> <span>autoplay is noisy</span> <em>2.5 s</em></div>
+          <div><b>Media players</b> <span>unambiguous</span> <em>instant</em></div>
+          <div><b>Console windows</b> <span>they only ever ring a bell</span> <em>never</em></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= SETUP ================= -->
+  <section id="setup">
+    <div class="wrap">
+      <h2>Setup, in full</h2>
+      <p class="section-lede">Everything else has sensible defaults.</p>
+
+      <ol class="steps">
+        <li>
+          <strong>Download and run it.</strong>
+          <p>There is no installer. It appears in the system tray.</p>
+        </li>
+        <li>
+          <strong>Right-click the icon → Settings…</strong>
+        </li>
+        <li>
+          <strong>Library</strong> — add a folder of music.
+        </li>
+        <li>
+          <strong>Output</strong> — pick the device to play on.
+          <p>
+            <em>Play a test tone</em> confirms you have the right one; if the target is a
+            television, it also tells you whether the set is on the right input.
+          </p>
+        </li>
+      </ol>
+
+      <div class="callout">
+        <p>
+          <strong>About that muted television.</strong> Every device carries its own Windows
+          volume, and a TV's habitually comes back muted after the set has been switched off —
+          which makes an app report <em>Playing</em> into a silent room. So a mute, or a volume
+          below 2%, is cleared as NoSilence opens the device. Muting it while the music is
+          playing still means what you meant by it.
+        </p>
+      </div>
+
+      <div class="callout">
+        <p>
+          <strong>SmartScreen will warn you once.</strong> The binaries are not code-signed, so
+          Windows objects on first run: <em>More info → Run anyway</em>. SHA-256 checksums are
+          published with every release.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= TV ================= -->
+  <section id="tv">
+    <div class="wrap">
+      <h2>It can turn the television on</h2>
+      <p class="section-lede">
+        Optional, and off by default. A PC graphics card cannot send HDMI-CEC, so this happens
+        over the network instead: Wake-on-LAN, the Samsung remote protocol, or any command you
+        care to configure.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Logging on is enough</h3>
+          <p>
+            Once a television is configured, NoSilence turns it on shortly after it starts — so
+            sitting down at the machine is the whole gesture. Unless you switched the set off by
+            hand within the last hour, in which case it leaves it alone.
+          </p>
+        </div>
+        <div class="card">
+          <h3>It asks the set, not the port</h3>
+          <p>
+            A standby that leaves the HDMI link asserted keeps the Windows endpoint alive while
+            the screen is dark, so endpoint presence is not a trustworthy power sensor. The
+            television's own report wins.
+          </p>
+          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/TV.md">Read the television notes →</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CLI ================= -->
+  <section id="cli">
+    <div class="wrap">
+      <h2>Two executables</h2>
+      <p class="section-lede">
+        A Windows program is either GUI or console, never both. The tray app must be the former
+        or a console window flashes at every logon — so the diagnostic commands get their own
+        binary.
+      </p>
+      <pre class="term"><span class="cmd">NoSilence.Console.exe --list-devices</span>     <span class="cmt">list audio outputs with their endpoint IDs</span>
+<span class="cmd">NoSilence.Console.exe --diagnose</span>         <span class="cmt">watch what every application is playing, live</span>
+<span class="cmd">NoSilence.Console.exe --replay FILE</span>      <span class="cmt">re-run a recording through the current settings</span>
+<span class="cmd">NoSilence.Console.exe --discover-tv</span>      <span class="cmt">find Samsung televisions on the network</span>
+<span class="cmd">NoSilence.Console.exe --wake-tv</span>          <span class="cmt">turn the configured television on</span>
+<span class="cmd">NoSilence.exe --quit</span>                    <span class="cmt">stop a running instance cleanly</span>
+<span class="cmd">NoSilence.exe --help</span>                    <span class="cmt">everything else</span></pre>
+      <p style="margin-top:1.5rem;color:var(--ink-soft);font-size:.95rem;max-width:44em">
+        Settings, state and logs live in <code>%APPDATA%\NoSilence\</code>. Put a file named
+        <code>nosilence.portable</code> beside the executable and it keeps everything in
+        <code>NoSilenceData\</code> next to itself instead.
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= DOWNLOAD ================= -->
+  <section id="download">
+    <div class="wrap">
+      <h2>Get it</h2>
+      <p class="section-lede">
+        Two shapes of the same program. Start with the self-contained one unless you know you
+        have the .NET 9 desktop runtime.
+      </p>
+      <div class="cta">
+        <a class="btn" href="https://github.com/BorderKeeper/NoSilence/releases/latest">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 12.5a.75.75 0 0 1 .75.75v.25h9v-.25a.75.75 0 0 1 1.5 0v.5A1.25 1.25 0 0 1 12.75 15h-9.5A1.25 1.25 0 0 1 2 13.75v-.5a.75.75 0 0 1 .75-.75Z"/></svg>
+          All downloads
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/BorderKeeper/NoSilence/blob/master/README.md">Read the manual</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap footer-row">
+    <span>NoSilence — a Windows tray utility. Free, open source.</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/BorderKeeper/NoSilence">Source</a>
+    <a href="https://github.com/BorderKeeper/NoSilence/releases">Releases</a>
+    <a href="https://github.com/BorderKeeper/NoSilence/issues">Issues</a>
+  </div>
+</footer>
+
+<script>
+// Sticky-header hairline once the page has moved.
+const hdr = document.getElementById('hdr');
+const onScroll = () => hdr.classList.toggle('scrolled', window.scrollY > 8);
+onScroll();
+addEventListener('scroll', onScroll, { passive: true });
+
+// Progressive enhancement: name the current version, and point the button straight at the
+// self-contained zip. The static href already works if this fails or is blocked.
+fetch('https://api.github.com/repos/BorderKeeper/NoSilence/releases/latest')
+  .then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(rel => {
+    const asset = (rel.assets || []).find(a => a.name.includes('self-contained'));
+    if (asset) {
+      document.getElementById('dl').href = asset.browser_download_url;
+      document.getElementById('dl-text').textContent = 'Download ' + rel.tag_name + ' for Windows';
+      const mb = (asset.size / 1048576).toFixed(0);
+      document.getElementById('dl-meta').innerHTML =
+        'Windows 10/11 · 64-bit · ' + mb + ' MB · ' +
+        '<a href="https://github.com/BorderKeeper/NoSilence/releases/latest">other builds</a>';
+    }
+  })
+  .catch(() => { /* the static link stands */ });
+</script>
+
+</body>
+</html>
