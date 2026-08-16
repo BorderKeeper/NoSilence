@@ -6,37 +6,46 @@
 <title>NoSilence — plays music only while your PC is quiet</title>
 <meta name="description" content="A Windows tray app that plays music on a secondary audio output — a TV, a spare speaker — but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
 <link rel="icon" href="favicon.ico" sizes="any">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf6ee">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#14120d">
 <meta property="og:title" content="NoSilence">
 <meta property="og:description" content="Plays music on a secondary audio output, but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
 <meta property="og:type" content="website">
 <style>
+/* Two hues, opposite each other on the wheel. --logo is the app icon's blue, sampled from the
+   asset at #4C8DFF (hue 218°), and it is fixed in both themes: it marks the product and, in the
+   timeline, the music itself. --accent is its direct complement at hue 38°, and carries
+   everything interactive plus the interfering sound the music gets out of the way of. Neutrals
+   are warmed to sit under both rather than the usual blue-grey, which fights the amber. */
 :root {
   color-scheme: light dark;
-  --bg:        #f6f7f9;
-  --bg-panel:  #ffffff;
-  --bg-sunken: #eceef2;
-  --line:      #dfe3ea;
-  --ink:       #14171c;
-  --ink-soft:  #4d5666;
-  --ink-faint: #7b8697;
-  --accent:    #2f6fe0;
-  --accent-ink:#ffffff;
-  --amber:     #d69300;
+  --bg:         #faf6ee;
+  --bg-panel:   #ffffff;
+  --bg-sunken:  #f1eada;
+  --line:       #e4dcca;
+  --ink:        #17150f;
+  --ink-soft:   #55503f;
+  --ink-faint:  #6f6754; /* darkened from the obvious choice to clear 4.5:1 on parchment */
+  --logo:       #4c8dff;
+  --accent:     #9a6407; /* darkened for text contrast on parchment */
+  --accent-fill:#e09a1f;
+  --on-accent:  #17150f;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:        #101317;
-    --bg-panel:  #171b21;
-    --bg-sunken: #0b0d10;
-    --line:      #262c35;
-    --ink:       #e8ecf2;
-    --ink-soft:  #a7b1c0;
-    --ink-faint: #6d788a;
-    --accent:    #5c9bff;
-    --accent-ink:#0b1220;
-    --amber:     #e8b12a;
+    --bg:         #14120d;
+    --bg-panel:   #1c1a15;
+    --bg-sunken:  #0c0b07;
+    --line:       #2e2a22;
+    --ink:        #f2ece0;
+    --ink-soft:   #b3aa98;
+    --ink-faint:  #8c8370; /* lightened from the obvious choice to clear 4.5:1 on warm ink */
+    --logo:       #4c8dff;
+    --accent:     #ffb84c;
+    --accent-fill:#ffb84c;
+    --on-accent:  #14120d;
   }
 }
 
@@ -69,14 +78,14 @@ header {
 header.scrolled { border-bottom-color: var(--line); }
 .nav { display: flex; align-items: center; gap: 1.5rem; height: 4rem; }
 .brand { display: flex; align-items: center; gap: .6rem; font-weight: 650; letter-spacing: -0.02em; color: var(--ink); text-decoration: none; margin-right: auto; }
-.brand svg { width: 1.5rem; height: 1.5rem; color: var(--accent); }
+.brand svg { width: 1.5rem; height: 1.5rem; color: var(--logo); }
 .nav a.navlink { color: var(--ink-soft); text-decoration: none; font-size: .94rem; }
 .nav a.navlink:hover { color: var(--ink); }
 @media (max-width: 34rem) { .nav a.navlink { display: none; } }
 
 /* ---------- hero ---------- */
 .hero { padding: 5rem 0 3.5rem; }
-.hero-note { width: 3.75rem; height: 3.75rem; color: var(--accent); display: block; margin-bottom: 1.75rem; }
+.hero-note { width: 3.75rem; height: 3.75rem; color: var(--logo); display: block; margin-bottom: 1.75rem; }
 .hero h1 { font-size: clamp(2.6rem, 7vw, 4rem); font-weight: 700; margin-bottom: 1.1rem; }
 .lede { font-size: clamp(1.12rem, 2.4vw, 1.3rem); color: var(--ink-soft); max-width: 34em; margin-bottom: 1rem; }
 .lede strong { color: var(--ink); font-weight: 600; }
@@ -85,7 +94,7 @@ header.scrolled { border-bottom-color: var(--line); }
 .cta { display: flex; flex-wrap: wrap; align-items: center; gap: .85rem 1.25rem; }
 .btn {
   display: inline-flex; align-items: center; gap: .55rem;
-  background: var(--accent); color: var(--accent-ink);
+  background: var(--accent-fill); color: var(--on-accent);
   font-weight: 600; font-size: 1rem;
   padding: .72rem 1.35rem; border-radius: .55rem;
   text-decoration: none; border: 1px solid transparent;
@@ -169,8 +178,8 @@ ol.steps p { color: var(--ink-soft); font-size: .95rem; margin: .3rem 0 0; }
 .term .cmt { color: var(--ink-faint); }
 
 .callout {
-  border-left: 3px solid var(--amber);
-  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  border-left: 3px solid var(--accent-fill);
+  background: color-mix(in srgb, var(--accent-fill) 9%, transparent);
   padding: .95rem 1.25rem; border-radius: 0 .5rem .5rem 0;
   color: var(--ink-soft); font-size: .95rem; margin: 2rem 0 0; max-width: 44em;
 }
@@ -238,25 +247,26 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
       <svg viewBox="0 0 720 168" role="img" aria-label="Timeline: a game starts making sound; after two seconds of sustained noise the music fades out; when the game stops, five seconds of quiet pass and the music fades back in.">
         <defs>
           <!-- currentColor does not inherit into <defs>, so name the token outright. -->
-          <linearGradient id="fadeOut" x1="0" x2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".55"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".05"/></linearGradient>
-          <linearGradient id="fadeIn"  x1="0" x2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".05"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".55"/></linearGradient>
+          <linearGradient id="fadeOut" x1="0" x2="1"><stop offset="0" stop-color="var(--logo)" stop-opacity=".9"/><stop offset="1" stop-color="var(--logo)" stop-opacity=".04"/></linearGradient>
+          <linearGradient id="fadeIn"  x1="0" x2="1"><stop offset="0" stop-color="var(--logo)" stop-opacity=".04"/><stop offset="1" stop-color="var(--logo)" stop-opacity=".9"/></linearGradient>
         </defs>
 
         <!-- row 1: the other application -->
         <text class="tl-label" x="0" y="14">A game, a video, a call</text>
         <rect x="0" y="26" width="720" height="26" rx="4" fill="var(--bg-sunken)"/>
-        <rect x="150" y="26" width="330" height="26" rx="4" fill="var(--amber)" opacity=".85"/>
-        <!-- Amber is mid-tone in both themes, so this label is dark in both. -->
-        <text class="tl-note" x="162" y="44" fill="#2b1d00" style="font-weight:600">above −50 dBFS</text>
+        <rect x="150" y="26" width="330" height="26" rx="4" fill="var(--accent-fill)"/>
+        <!-- Amber is mid-tone in both themes, so this label is dark in both. In style, not as a
+             fill attribute: .tl-note sets fill, and a class beats a presentation attribute. -->
+        <text class="tl-note" x="162" y="44" style="fill:#2b1d00;font-weight:600">above −50 dBFS</text>
 
         <!-- row 2: the music -->
         <text class="tl-label" x="0" y="90">Your music</text>
-        <g color="var(--accent)">
+        <g color="var(--logo)">
           <rect x="0" y="102" width="720" height="26" rx="4" fill="var(--bg-sunken)"/>
-          <rect x="0"   y="102" width="212" height="26" fill="currentColor" opacity=".55"/>
+          <rect x="0"   y="102" width="212" height="26" fill="currentColor" opacity=".9"/>
           <rect x="212" y="102" width="46"  height="26" fill="url(#fadeOut)"/>
           <rect x="480" y="102" width="46"  height="26" fill="url(#fadeIn)"/>
-          <rect x="526" y="102" width="194" height="26" fill="currentColor" opacity=".55"/>
+          <rect x="526" y="102" width="194" height="26" fill="currentColor" opacity=".9"/>
           <rect x="0" y="102" width="720" height="26" rx="4" fill="none" stroke="var(--line)"/>
         </g>
 
