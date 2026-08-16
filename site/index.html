@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NoSilence — music for the quiet, and only the quiet</title>
-<meta name="description" content="NoSilence plays your music on a second audio output — a TV, a spare speaker — but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out. A free Windows tray app.">
+<title>NoSilence — plays music only while your PC is quiet</title>
+<meta name="description" content="A Windows tray app that plays music on a secondary audio output — a TV, a spare speaker — but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
 <link rel="icon" href="favicon.ico" sizes="any">
 <meta property="og:title" content="NoSilence">
-<meta property="og:description" content="Plays music on a second audio output, but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
+<meta property="og:description" content="Plays music on a secondary audio output, but only while your PC is otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.">
 <meta property="og:type" content="website">
 <style>
 :root {
@@ -209,15 +209,15 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
   <div class="wrap hero">
     <svg class="hero-note" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="M63 6c17 11 27 21 25 39-4-12-14-18-25-22z"/><rect x="54" y="6" width="9" height="68" rx="2.5"/><ellipse cx="37" cy="76" rx="21" ry="15.5" transform="rotate(-18 37 76)"/></svg>
 
-    <h1>Music for the quiet,<br>and only the quiet.</h1>
+    <h1>NoSilence</h1>
 
     <p class="lede">
-      NoSilence plays your own music on a <strong>second audio output</strong> — a television, a
-      spare speaker — but only while your PC is otherwise silent. Start a game, a video or a
-      call and it fades out. Stop, and it fades back in.
+      Plays music on a <strong>secondary audio output</strong> — a television, a spare speaker —
+      but only while your PC is otherwise quiet. Start a game, a video or a call and it fades
+      out; stop, and it fades back in.
     </p>
     <p class="tray-line">
-      It lives in the system tray and is meant to be forgotten about.
+      It lives in the system tray. Windows 10 and 11, free, source on GitHub.
     </p>
 
     <div class="cta">
@@ -226,7 +226,7 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
         <span id="dl-text">Download for Windows</span>
       </a>
       <a class="btn btn-ghost" href="https://github.com/BorderKeeper/NoSilence">View on GitHub</a>
-      <span class="meta" id="dl-meta">Windows 10/11 · 64-bit · free and open source</span>
+      <span class="meta" id="dl-meta">Windows 10/11 · 64-bit · no installer</span>
     </div>
 
     <!-- What actually happens, on a timeline -->
@@ -286,41 +286,43 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
 
       <div class="grid">
         <div class="card">
-          <h3>It knows itself</h3>
+          <h3>Its own output is excluded</h3>
           <p>
-            Its own playback is excluded by process ID. That is why the music output is allowed
-            to be the very device you are listening on — it never ducks itself into silence.
+            NoSilence excludes its own playback by process ID, so the music output can be the
+            same device you listen on without the app silencing itself.
           </p>
         </div>
         <div class="card">
-          <h3>A chime is not a film</h3>
+          <h3>Sound has to be sustained</h3>
           <p>
-            A source must stay above about −50 dBFS for two full seconds before anything fades.
-            Notification chimes last about one. Without that requirement, a single Discord ping
-            would buy you a stretch of silence.
+            A source must stay above about −50 dBFS for two seconds before the music fades out,
+            and everything must stay quiet for five seconds before it comes back. Notification
+            chimes are around a second long; without the sustain requirement a single Discord
+            ping would silence the music.
           </p>
         </div>
         <div class="card">
-          <h3>Tunable against your own machine</h3>
+          <h3>Tuned against a recording</h3>
           <p>
-            Record five minutes of a normal evening, then replay it through different settings
-            until it behaves. Tuning happens against real data rather than by guessing.
+            <code>--diagnose</code> writes a session to a file and <code>--replay</code> re-runs
+            it through the current settings, so thresholds can be adjusted against real data
+            rather than by guessing.
           </p>
-          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/DETECTION.md">Read the detection notes →</a></p>
+          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/DETECTION.md">Detection notes →</a></p>
         </div>
       </div>
 
       <div class="card rules-card">
         <h3>Per-application rules</h3>
         <p>
-          Different software deserves different patience. Right-click any row in
+          The sustain requirement varies by application. Right-click any row in
           <strong>What's playing</strong> to change how an application is treated.
         </p>
         <div class="rules">
           <div><b>Chat clients</b> <span>a ping is short, a call is not</span> <em>4 s</em></div>
-          <div><b>Browsers</b> <span>autoplay is noisy</span> <em>2.5 s</em></div>
+          <div><b>Browsers</b> <span>autoplay is common</span> <em>2.5 s</em></div>
           <div><b>Media players</b> <span>unambiguous</span> <em>instant</em></div>
-          <div><b>Console windows</b> <span>they only ever ring a bell</span> <em>never</em></div>
+          <div><b>Console windows</b> <span>they only ring a bell</span> <em>never</em></div>
         </div>
       </div>
     </div>
@@ -329,8 +331,8 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
   <!-- ================= SETUP ================= -->
   <section id="setup">
     <div class="wrap">
-      <h2>Setup, in full</h2>
-      <p class="section-lede">Everything else has sensible defaults.</p>
+      <h2>Setup</h2>
+      <p class="section-lede">This is all of it. Everything else has defaults.</p>
 
       <ol class="steps">
         <li>
@@ -354,19 +356,18 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
 
       <div class="callout">
         <p>
-          <strong>About that muted television.</strong> Every device carries its own Windows
-          volume, and a TV's habitually comes back muted after the set has been switched off —
-          which makes an app report <em>Playing</em> into a silent room. So a mute, or a volume
-          below 2%, is cleared as NoSilence opens the device. Muting it while the music is
-          playing still means what you meant by it.
+          <strong>Televisions come back muted.</strong> Every device carries its own Windows
+          volume, and a TV's habitually returns muted after the set has been switched off, which
+          makes the app report <em>Playing</em> into a silent room. So a mute — or a volume below
+          2% — is cleared as NoSilence opens the device. Muting it while the music is playing
+          still means what you meant by it.
         </p>
       </div>
 
       <div class="callout">
         <p>
-          <strong>SmartScreen will warn you once.</strong> The binaries are not code-signed, so
-          Windows objects on first run: <em>More info → Run anyway</em>. SHA-256 checksums are
-          published with every release.
+          <strong>SmartScreen will warn on first run.</strong> The binaries are not code-signed,
+          so Windows objects: <em>More info → Run anyway</em>.
         </p>
       </div>
     </div>
@@ -375,30 +376,30 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
   <!-- ================= TV ================= -->
   <section id="tv">
     <div class="wrap">
-      <h2>It can turn the television on</h2>
+      <h2>Turning the television on</h2>
       <p class="section-lede">
         Optional, and off by default. A PC graphics card cannot send HDMI-CEC, so this happens
-        over the network instead: Wake-on-LAN, the Samsung remote protocol, or any command you
-        care to configure.
+        over the network instead: Wake-on-LAN, the Samsung remote protocol, or a shell command
+        you configure yourself.
       </p>
 
       <div class="grid">
         <div class="card">
-          <h3>Logging on is enough</h3>
+          <h3>It fires shortly after startup</h3>
           <p>
-            Once a television is configured, NoSilence turns it on shortly after it starts — so
-            sitting down at the machine is the whole gesture. Unless you switched the set off by
-            hand within the last hour, in which case it leaves it alone.
+            Once a television is configured, NoSilence turns it on a few seconds after it
+            starts, so logging on is enough. If you switched the set off by hand within the last
+            hour it leaves it alone.
           </p>
         </div>
         <div class="card">
-          <h3>It asks the set, not the port</h3>
+          <h3>Endpoint presence is not a power sensor</h3>
           <p>
-            A standby that leaves the HDMI link asserted keeps the Windows endpoint alive while
-            the screen is dark, so endpoint presence is not a trustworthy power sensor. The
-            television's own report wins.
+            A standby that leaves the HDMI link asserted keeps the Windows endpoint active while
+            the screen is dark, so the endpoint being present does not mean the set is on.
+            NoSilence asks the television instead.
           </p>
-          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/TV.md">Read the television notes →</a></p>
+          <p><a href="https://github.com/BorderKeeper/NoSilence/blob/master/docs/TV.md">Television notes →</a></p>
         </div>
       </div>
     </div>
@@ -431,17 +432,18 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
   <!-- ================= DOWNLOAD ================= -->
   <section id="download">
     <div class="wrap">
-      <h2>Get it</h2>
+      <h2>Download</h2>
       <p class="section-lede">
-        Two shapes of the same program. Start with the self-contained one unless you know you
-        have the .NET 9 desktop runtime.
+        Every release ships two zips. The self-contained one needs nothing installed; the other
+        is a few megabytes instead of a hundred and needs the .NET 9 desktop runtime. Each
+        contains both executables, and SHA-256 checksums are published alongside them.
       </p>
       <div class="cta">
         <a class="btn" href="https://github.com/BorderKeeper/NoSilence/releases/latest">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 12.5a.75.75 0 0 1 .75.75v.25h9v-.25a.75.75 0 0 1 1.5 0v.5A1.25 1.25 0 0 1 12.75 15h-9.5A1.25 1.25 0 0 1 2 13.75v-.5a.75.75 0 0 1 .75-.75Z"/></svg>
-          All downloads
+          All releases
         </a>
-        <a class="btn btn-ghost" href="https://github.com/BorderKeeper/NoSilence/blob/master/README.md">Read the manual</a>
+        <a class="btn btn-ghost" href="https://github.com/BorderKeeper/NoSilence/blob/master/README.md">README</a>
       </div>
     </div>
   </section>
@@ -450,7 +452,7 @@ footer { padding: 3rem 0 4rem; border-top: 1px solid var(--line); color: var(--i
 
 <footer>
   <div class="wrap footer-row">
-    <span>NoSilence — a Windows tray utility. Free, open source.</span>
+    <span>NoSilence — a Windows tray utility. Source on GitHub.</span>
     <span class="spacer"></span>
     <a href="https://github.com/BorderKeeper/NoSilence">Source</a>
     <a href="https://github.com/BorderKeeper/NoSilence/releases">Releases</a>
@@ -476,7 +478,7 @@ fetch('https://api.github.com/repos/BorderKeeper/NoSilence/releases/latest')
       document.getElementById('dl-text').textContent = 'Download ' + rel.tag_name + ' for Windows';
       const mb = (asset.size / 1048576).toFixed(0);
       document.getElementById('dl-meta').innerHTML =
-        'Windows 10/11 · 64-bit · ' + mb + ' MB · ' +
+        'Windows 10/11 · 64-bit · ' + mb + ' MB · no installer · ' +
         '<a href="https://github.com/BorderKeeper/NoSilence/releases/latest">other builds</a>';
     }
   })
