@@ -21,11 +21,14 @@
 
     <!-- Publish: one self-contained exe. Trimming is NOT supported for WinForms; do not enable it. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
+    <!-- Driven by NoSilenceSelfContained (Directory.Build.props) so the release workflow can
+         build the framework-dependent variant as well. See the note there. -->
+    <SelfContained>$(NoSilenceSelfContained)</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Only legal for a self-contained bundle. -->
+    <EnableCompressionInSingleFile Condition="'$(NoSilenceSelfContained)' == 'true'">true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>embedded</DebugType>

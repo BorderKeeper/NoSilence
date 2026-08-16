@@ -10,10 +10,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
+    <!-- Must agree with NoSilence.csproj, which is why both read the same switch. -->
+    <SelfContained>$(NoSilenceSelfContained)</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <EnableCompressionInSingleFile Condition="'$(NoSilenceSelfContained)' == 'true'">true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>embedded</DebugType>

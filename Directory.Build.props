@@ -13,6 +13,13 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <Version Condition="'$(Version)' == ''">0.0.1</Version>
+
+    <!-- Which of the two published shapes the exe projects build. Our own property rather
+         than SelfContained itself, because the SDK does not carry SelfContained across a
+         ProjectReference: publishing NoSilence.Console framework-dependent left the
+         NoSilence.csproj it references self-contained, and the build failed with NETSDK1151.
+         A property the SDK has never heard of flows down untouched. -->
+    <NoSilenceSelfContained Condition="'$(NoSilenceSelfContained)' == ''">true</NoSilenceSelfContained>
     <Authors>ledrj</Authors>
     <Company>ledrj</Company>
     <Product>NoSilence</Product>

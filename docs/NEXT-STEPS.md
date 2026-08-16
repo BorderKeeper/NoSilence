@@ -77,6 +77,14 @@ Worth keeping, because each one cost real debugging time and each is written int
 3. **`SHQueryUserNotificationState` catches games.** Only true exclusive full screen and
    presentation mode. Borderless-windowed games — most modern ones — look like ordinary
    windows. The signal is a supplement, nothing more.
+4. **"The release workflow is written; the first tag proves it."** It proved it by failing.
+   `dotnet publish --self-contained false` applies only to the project named on the command
+   line, so `NoSilence.csproj` stayed self-contained when reached through
+   `NoSilence.Console`'s `ProjectReference` and the framework-dependent half of the release
+   died on `NETSDK1151`. Passing `-p:SelfContained=false` instead does not fix it either —
+   the SDK does not carry that property across a project reference. The switch is now
+   `NoSilenceSelfContained` in `Directory.Build.props`, a name the SDK has never heard of,
+   which therefore flows down untouched. Both shapes are built locally before tagging now.
 
 ## This machine
 
