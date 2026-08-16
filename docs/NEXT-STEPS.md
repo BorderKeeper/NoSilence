@@ -37,13 +37,22 @@ values that differ from the defaults, so improved defaults still reach it.
 - **Waking the television after the machine comes back** (NS-12). The three `WakeWatch` signals
   are unit tested but none has met a real morning. The launch path they share is now proven (see
   below), so what is left unverified is only the detection of the wake itself.
+- **A call, end to end** (NS-13). Arming on the open capture session rather than on your voice is
+  unit tested against the shape taken from the 14 August log, but it has not met a real meeting.
+  The thing to watch for is the opposite failure: a client that holds the microphone open outside
+  a meeting. The log will say so — `The call on … produced nothing for 30 min`.
+- **A morning with the veto fix in it** (NS-15). The startup wake itself is now proven twice on
+  hardware, including from a cold standby at 12:55 on 16 August, but the reason it was not firing
+  at 09:30 was a stale endpoint loss confirmed as a manual power-off after a suspend. That path
+  only runs after a real overnight.
 - **Sleep/resume recovery.** ~~`PowerModeChanged` → teardown → 3 s settle → reopen is written
   and never exercised. Needs the machine actually suspended.~~ Now answered, 11 August: the event
   **never arrives on this machine**, because its nightly "sleep" is Away Mode rather than a
   suspend, so that code path has never run and recovery has been happening by accident via
   endpoint notifications. See NS-12; `WakeWatch` no longer depends on it.
-- **CI and the release workflow.** Cannot run GitHub Actions locally. First push or tag proves it.
-- **A real tag build.** `release.yml` has never produced a release.
+- ~~**CI and the release workflow.** Cannot run GitHub Actions locally. First push or tag proves
+  it.~~ Proven by the `v2.0.0` tag, 16 August.
+- ~~**A real tag build.** `release.yml` has never produced a release.~~ Done — `v2.0.0`.
 
 ## Not built
 
@@ -98,9 +107,12 @@ Step 1 has now happened — two days of daily use, written up as discrete items 
    the exclusion list is certainly still incomplete. Applications the rules already ignore are
    now ignored for the microphone too.
 4. **Verify sleep/resume** next time the machine is suspended anyway.
-5. **Tag `v2.0.0`** once CI has been seen to pass, and check the release workflow produces
-   both binaries plus `SHA256SUMS.txt`.
-6. **Then**, if wanted: crossfade, per-track gain.
+5. ~~**Tag `v2.0.0`** once CI has been seen to pass, and check the release workflow produces
+   both binaries plus `SHA256SUMS.txt`.~~ Done, 16 August, after a second round of daily-use
+   fixes (NS-13 to NS-15) written up in `docs/BACKLOG.md`.
+6. **Live with 2.0.0.** The three unverified items above are all "needs a real morning" or
+   "needs a real meeting", and the log is instrumented for every one of them.
+7. **Then**, if wanted: crossfade, per-track gain.
 
 ## Testing constraints
 

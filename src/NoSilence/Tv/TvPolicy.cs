@@ -50,12 +50,16 @@ internal sealed class TvPolicyConfig
     /// </remarks>
     public int StartupWindowMs { get; set; } = 300000;
 
-    /// <summary>The shortened <see cref="RequireWantsToPlayForMs"/> used inside that window.</summary>
+    /// <summary>How long after sitting down the television is turned on.</summary>
     /// <remarks>
-    /// Not zero. The output endpoint takes a moment to open, so for the first seconds after
-    /// launch a television that is already on still looks off — and if the machine came up
-    /// into a call or a game, the engine stops wanting to play and no wake should happen at
-    /// all.
+    /// Not zero: the output endpoint takes a moment to open, so for the first seconds after
+    /// launch a television that is already on still looks off, and the set has to be given
+    /// time to answer for itself.
+    /// <para>
+    /// Measured from the launch or the wake, and deliberately not from the engine wanting to
+    /// play. See <c>TvPolicy.ShouldWake</c> — waiting for fifteen quiet seconds meant the
+    /// television did not come on at all on a morning that had a video playing in it.
+    /// </para>
     /// </remarks>
     public int StartupWakeAfterMs { get; set; } = 15000;
 
@@ -189,11 +193,30 @@ internal static class TvPolicy
             return false;
         }
 
-        int requiredMs = atStartup
-            ? Math.Min(config.RequireWantsToPlayForMs, config.StartupWakeAfterMs)
-            : config.RequireWantsToPlayForMs;
+        // Starting up, the clock runs from sitting down rather than from the last moment
+        // something else stopped making a noise.
+        //
+        // It used to run from WantsToPlaySince, and on this machine that meant the startup
+        // wake could not fire at all on an ordinary morning. The log of 14 August: launch at
+        // 09:45:29, the set answering Standby at 09:45:30, and Chrome making a sound at
+        // 09:45:32 — three seconds in, which reset the timer, and it stayed reset until 10:20,
+        // long after the five-minute window had closed. The television came on at 13:20,
+        // after lunch, because coming back from lunch counted as another wake. Reported as
+        // *"it did not turn on when I opened the app or when I turned PC on? Seems to not be
+        // very durable."*
+        //
+        // Nothing else playing is a poor reason to leave the screen dark anyway: this
+        // television *is* the output device, so if it is off then whatever is playing cannot
+        // be heard either. Every guard that matters is above — the set's own report of being
+        // off, a library to play, not snoozed, and the manual power-off veto below.
+        if (atStartup)
+        {
+            return (input.Now - input.StartedAt).TotalMilliseconds >= config.StartupWakeAfterMs
+                && !IsBlocked(input.Now, config, state);
+        }
 
-        if (state.WantsToPlaySince is not { } since || (input.Now - since).TotalMilliseconds < requiredMs)
+        if (state.WantsToPlaySince is not { } since
+            || (input.Now - since).TotalMilliseconds < config.RequireWantsToPlayForMs)
         {
             return false;
         }

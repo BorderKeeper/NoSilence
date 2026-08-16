@@ -455,6 +455,157 @@ believing it, which is the delayed-confirmation shape used in the reporter's own
 on without being asked, and the log names the signal that noticed. Not yet observed — the fix has
 never met a morning.
 
+## NS-13 — A meeting became seven calls, and each one announced itself
+
+**Done — 16 August, unverified against a real meeting.**
+
+**Observed**, 14–15 August: *"I keep getting you are in a zoom call toasts"*; *"Seems that the
+toast appears everytime I make a noise, I am alone in the meeting right now so its very
+noticeable"*; and, from 12 August, *"I joined zoom and it did not mute had to snooze."*
+
+**Evidence.** `nosilence-20260814.log`, one meeting:
+
+```
+10:20:41  SILENT   In a call — Zoom.exe
+10:23:09  SILENT   Quiet — resuming in 14 s      ← 2m28s after the last word
+10:23:32  PLAYING  Nothing else is playing
+10:25:07  SILENT   In a call — Zoom.exe          ← same meeting, new call, new balloon
+10:27:13  SILENT   Quiet — resuming in 15 s
+10:27:28  PLAYING  Nothing else is playing
+10:30:47  SILENT   In a call — Zoom.exe
+```
+
+Seven of those before 11:40. The gaps are all the same length because they are all the same
+thing: `CallIdleTimeoutMs`, two minutes, expiring.
+
+**Diagnosis.** NS-2 made a call *arm* on sustained microphone signal and *hold* while the
+capture session stayed open, and the arming half was the mistake. Level is the wrong axis in
+both directions. Joining a meeting and listening never armed anything, which is the 12 August
+note — the music played over the meeting until the user spoke, and the answer was Snooze. And
+once armed, a two-minute quiet stretch was read as the meeting ending, so `EndCall` ran, the
+music came back, and the next word armed a fresh call. The balloon fired on every one of them,
+which is what made it visible.
+
+The reasoning behind arming on level was that "the microphone is open" is what
+`TreatActiveCaptureAsNoise` does, and that is off by default because OBS and Voicemeeter hold a
+session open for ever. True of the *global setting*; not true of a rule that applies only to
+`CaptureMode.Call` applications. Those open a capture session on joining a meeting and drop it
+on leaving — visible in the same log, where the hold survived 32 unbroken minutes at 11:07 and
+ended cleanly when Zoom closed the session.
+
+**What was built.**
+
+- A call arms on the conferencing client's capture session going **Active**, with no level
+  requirement. Everything without a call rule is still judged on level exactly as before.
+- `CallIdleTimeoutMs` 2 min → **30 min**, and it is now genuinely a safety net rather than the
+  everyday mechanism. It logs a line when it fires, so if some client really does hold the
+  microphone open after a meeting, the next log says which.
+- The timeout **latches** to the session that exhausted it (`DecisionState.ExhaustedCallSessionId`).
+  Without that, arming on the open microphone alone would restart the same dead call on the very
+  next tick, and the bound would do nothing at all. Real signal, or the session closing, clears it.
+- The call balloon moved to `NotificationLevel.All` and gained a ten-minute per-call cooldown.
+
+**Acceptance.** One meeting produces one `In a call` line and one resume. Four new tests,
+including `JoiningACallSilencesBeforeAnybodySpeaks` and `AQuietStretchInAMeetingDoesNotEndTheCall`,
+the latter drawn from the log above.
+
+---
+
+## NS-14 — The flap warning fired twice an hour, about behaviour that was correct
+
+**Done — 16 August.** Two separate faults behind one complaint.
+
+**Observed.** *"I kept getting toasts the night prior when I was watching TV about music
+starting and stopping often. This happened due to me pausing videos or looking for next to play
+which is fine."* And the next day: *"throughout the day multiple time I got the toast about many
+pauses which again is expected."*
+
+**Evidence.** Eleven warnings on 15 August, arriving in pairs seconds apart:
+
+```
+09:56:34.727 [WRN] Play/silence has flipped 20 times in the last hour…
+09:56:39.138 [WRN] Play/silence has flipped 20 times in the last hour…
+18:37:14.216 [WRN] …
+18:37:59.973 [WRN] …
+```
+
+**Diagnosis.**
+
+1. `DetectionService.Tick` tested `_state.TransitionsThisHour == 20` inside the block that runs
+   whenever a decision is logged. Ducked→Releasing is a second logged change at the same count,
+   so every warning fired twice. NS-9's *"the detection service raises this at most once an hour,
+   so it needs no rate limiting of its own"* was therefore wrong, and `NotifyFlapping` passes
+   `force: true`, so both balloons got through.
+2. More importantly, the warning was telling the user something they already knew. Pausing a
+   video and picking the next one *is* twenty transitions in an hour, and the app was working.
+   NS-9 surfaced it at every notification level; the default is `ErrorsOnly`, and this is not an
+   error.
+
+**What was built.** `DecisionState.ShouldReportFlapping` — a latch, re-armed when the transition
+window rolls over, and on the state rather than at the call site so it can be tested through the
+real engine (`TheFlapWarningIsRaisedOncePerHour`). The balloon now requires
+`NotificationLevel.All`. The log warning is unchanged at every level, which is where it was
+always actually useful.
+
+---
+
+## NS-15 — The startup wake waited for silence that never came
+
+**Done — 16 August, unverified against a real morning.** Two independent faults, either of which
+was enough on its own.
+
+**Observed.** *"TV did not turn on when I turned on NoSilence.exe"*, and *"13:20 PC finally
+turned on when I went back from my lunch break, but it did not turn on when I opened the app or
+when I turned PC on? Seems to not be very durable."*
+
+**Evidence, fault one.** `nosilence-20260814.log`:
+
+```
+09:45:29.960  NoSilence started.
+09:45:30.377  The television reports "Standby" at startup.
+09:45:32.555  SILENT — chrome.exe: peaked at -4.3 dBFS over 2.5 s
+10:20:31.709  PLAYING — Nothing else is playing
+13:19:52.640  The machine is back (input arrived after a long silence)
+13:20:13.633  Waking the television (after a wake).
+```
+
+Everything NS-8 needed was in place at 09:45:30 — the set answered `Standby`, there was music,
+nothing was blocked. The startup wake still could not fire, because it needed fifteen seconds of
+`WantsToPlaySince` running continuously and Chrome made a sound three seconds in. The timer reset
+and stayed reset until 10:20, thirty-five minutes after the five-minute window had closed. The
+television came on at 13:20 because coming back from lunch counted as another wake, which is the
+"finally" in the note.
+
+**Evidence, fault two.** Two mornings running, on the same tick:
+
+```
+2026-08-16 10:39:41.676  The machine is back (the clock jumped, so the machine was suspended)
+2026-08-16 10:39:41.677  Television wake paused until 11:39 (you turned it off).
+```
+
+Nobody had touched the remote. `ConfirmOrForgetAManualPowerOff` believes an endpoint loss once it
+has persisted for fifteen seconds — and a suspended machine satisfies that for free, because no
+ticks run while it is away, so the first tick after a resume finds a loss that is hours old. The
+veto NS-12 was careful to delay then blocked waking for the following hour, every morning. Note
+that the fifteen-second confirmation added in NS-12 did not cause this and does not prevent it;
+the flaw is in measuring elapsed time across an interval in which the process was not running.
+
+**What was built.**
+
+- Inside the startup window the wake is timed from the launch or the wake itself, not from
+  `WantsToPlaySince`. The guards that matter are untouched: the set's own report of being off,
+  a library with tracks in it, not snoozed, not always-silent, and the manual power-off veto.
+  Something else playing is a poor reason to leave the screen dark — this television *is* the
+  output device, so if it is off nobody can hear that either.
+- `TvService` drops a pending, unconfirmed endpoint loss whenever a wake is observed. Only the
+  pending one: a veto already confirmed, with somebody sitting at the machine, really was an
+  instruction and stays.
+
+**Acceptance.** Sleep the machine overnight with the set off; in the morning the television is
+on within about twenty seconds, and no `wake paused` line appears. Not yet met a morning.
+
+---
+
 ## NS-10 — Record a call before tuning anything
 
 **Do this first.** NS-1 and NS-2 are both timing changes, and `NEXT-STEPS.md` step 2 exists for

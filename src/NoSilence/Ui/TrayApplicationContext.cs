@@ -44,7 +44,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private DateTimeOffset _lastBalloonAt;
     private Action? _balloonAction;
     private bool _wasInCall;
+    private string? _lastCallBalloon;
+    private DateTimeOffset _lastCallBalloonAt;
     private bool _shuttingDown;
+
+    /// <summary>How long the same call has to stay quiet before it may announce itself again.</summary>
+    private static readonly TimeSpan CallBalloonCooldown = TimeSpan.FromMinutes(10);
 
     public TrayApplicationContext(AppController app, ILogger<TrayApplicationContext> log)
     {
@@ -449,10 +454,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
     /// Call on the UI thread. The detection service raises this at most once an hour, so it
     /// needs no rate limiting of its own — and "Why is it silent?" is the right destination,
     /// because it names every source and its level rather than describing the symptom again.
+    /// <para>
+    /// Only at <see cref="NotificationLevel.All"/>, which is the correction. Flapping is a
+    /// diagnostic, not a fault, and it is very often the app working: an evening of pausing
+    /// videos and picking the next one flips play/silence dozens of times, entirely correctly.
+    /// Told about it at the default level, the reaction was *"which again is expected"* —
+    /// four times in two days. The warning still goes to the log at every level, where the
+    /// person looking for it will find it.
+    /// </para>
     /// </remarks>
     public void NotifyFlapping(int transitions)
     {
-        if (_app.Settings.General.Notifications == NotificationLevel.Off)
+        if (_app.Settings.General.Notifications != NotificationLevel.All)
         {
             return;
         }
@@ -469,10 +482,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
     /// One balloon when a call takes the music down, carrying the escape hatch with it.
     /// </summary>
     /// <remarks>
-    /// The exception to the "routine ducking never produces a balloon" rule, and it earns the
-    /// exception: a call is the one duck that lasts an hour, and the moment you want to
-    /// overrule it is the moment it starts. Fired on the transition only, so a long meeting
-    /// produces exactly one.
+    /// Only at <see cref="NotificationLevel.All"/>. It shipped at every level on the reasoning
+    /// that a call is the one duck that lasts an hour, so the moment you want to overrule it is
+    /// the moment it starts. Two things were wrong with that. It is not an error, and the
+    /// default level says errors only; and "fired on the transition only, so a long meeting
+    /// produces exactly one" was untrue in practice, because the call itself kept ending and
+    /// restarting — *"the toast appears every time I make a noise, I am alone in the meeting
+    /// right now"*. The cause of that is fixed in the engine, and the escape hatch has always
+    /// also been a menu item, which is where it stays.
+    /// <para>
+    /// The cooldown is belt and braces for the same complaint: whatever makes a call bounce in
+    /// future, it will not be discovered as a stream of balloons.
+    /// </para>
     /// </remarks>
     private void NotifyCallStarted()
     {
@@ -484,12 +505,22 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _wasInCall = inCall;
 
-        if (!inCall || _app.Settings.General.Notifications == NotificationLevel.Off)
+        if (!inCall || _app.Settings.General.Notifications != NotificationLevel.All)
         {
             return;
         }
 
         string who = _app.LastDecision?.Reason ?? "In a call";
+
+        if (string.Equals(who, _lastCallBalloon, StringComparison.Ordinal)
+            && DateTimeOffset.Now - _lastCallBalloonAt < CallBalloonCooldown)
+        {
+            return;
+        }
+
+        _lastCallBalloon = who;
+        _lastCallBalloonAt = DateTimeOffset.Now;
+
         ShowBalloon("NoSilence", $"{who}\r\nClick here to play through it.", ToolTipIcon.Info,
             force: true, onClick: () => _app.PlayThroughCall());
     }

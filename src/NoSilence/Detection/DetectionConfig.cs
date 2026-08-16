@@ -87,12 +87,19 @@ internal sealed class DetectionConfig
     /// <remarks>
     /// The safety net on the call hold, and the reason it cannot strand the music. Some
     /// clients keep the capture session open after a meeting ends; without this, "hold while
-    /// the microphone is open" would mean "hold until the application exits". Two minutes of
-    /// complete silence from both directions is not a meeting in progress. A muted listener
-    /// is still covered, because the other end's audio is render traffic from the same
-    /// application and keeps the call alive.
+    /// the microphone is open" would mean "hold until the application exits".
+    /// <para>
+    /// Thirty minutes, against the two it shipped with, and the change is the point rather
+    /// than a tweak. At two minutes this was not a safety net, it was the everyday mechanism:
+    /// a log of 14 August shows one Zoom meeting broken into seven separate calls, each ending
+    /// after exactly two minutes of nobody speaking and re-arming on the next word, with the
+    /// music surfacing for up to three minutes in between. Quiet stretches inside a meeting
+    /// are ordinary — reading a screen share, waiting for somebody to join, sitting muted.
+    /// The signal that a meeting is over is the client closing its microphone, which it does
+    /// promptly; this only covers the one that does not.
+    /// </para>
     /// </remarks>
-    public int CallIdleTimeoutMs { get; set; } = 120000;
+    public int CallIdleTimeoutMs { get; set; } = 1800000;
 
     /// <summary>Fade down. Fast enough to feel immediate, slow enough not to click.</summary>
     public int DuckFadeOutMs { get; set; } = 400;

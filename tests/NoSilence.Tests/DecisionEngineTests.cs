@@ -561,18 +561,74 @@ public class DecisionEngineTests
     }
 
     /// <summary>
-    /// The dangerous version of this feature is the one where a conferencing client sitting
-    /// idle in the tray with an open microphone silences the music forever. Arming requires
-    /// real signal, so an idle microphone never starts a call.
+    /// Joining a meeting and listening has to silence the music, without waiting for you to
+    /// say something first.
     /// </summary>
+    /// <remarks>
+    /// Reported as *"I joined zoom and it did not mute had to snooze"*. Arming on sustained
+    /// microphone level meant the music played over the top of a meeting for as long as the
+    /// user sat quietly in it, which is most of most meetings.
+    /// </remarks>
     [Fact]
-    public void AnIdleMicrophoneNeverStartsACall()
+    public void JoiningACallSilencesBeforeAnybodySpeaks()
     {
         DetectionConfig config = CallConfig();
         var state = new DecisionState();
         DateTimeOffset clock = Start;
 
-        DecisionOutcome outcome = RunCapture(state, config, ref clock, 120000, Microphone("Zoom.exe", -100));
+        // Zoom opens the microphone. Nothing is ever loud enough to count as speech.
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 1000, Microphone("Zoom.exe", -100));
+
+        Assert.True(outcome.WantsSilence);
+        Assert.Equal("In a call — Zoom.exe", outcome.Reason);
+        Assert.Equal(1, state.TransitionsThisHour);
+    }
+
+    /// <summary>
+    /// The other half of the same complaint: *"the toast appears every time I make a noise, I
+    /// am alone in the meeting right now."*
+    /// </summary>
+    /// <remarks>
+    /// Reconstructed from the log of 14 August, where one Zoom meeting became seven calls.
+    /// Each two-minute quiet stretch tripped the idle timeout, the music came back, and the
+    /// next word started a fresh call — a duck, a resume and a balloon apiece.
+    /// </remarks>
+    [Fact]
+    public void AQuietStretchInAMeetingDoesNotEndTheCall()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+        string? app = state.CallApp;
+
+        // Eight minutes of nobody saying anything, which used to be four separate calls.
+        for (int i = 0; i < 4; i++)
+        {
+            RunCapture(state, config, ref clock, 120000, Microphone("Zoom.exe", -100));
+        }
+
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+
+        Assert.True(outcome.WantsSilence);
+        Assert.Equal(app, state.CallApp);
+        Assert.Equal(1, state.TransitionsThisHour);
+    }
+
+    /// <summary>
+    /// The dangerous version of this feature is the one where a tool sitting in the tray with
+    /// an open microphone silences the music forever. What keeps it safe is the rules table,
+    /// not the level: only applications that make calls hold silence for an open microphone.
+    /// </summary>
+    [Fact]
+    public void AnIdleMicrophoneOnANonCallApplicationNeverStartsACall()
+    {
+        DetectionConfig config = CallConfig();
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 120000, Microphone("somerecorder.exe", -100));
 
         Assert.False(outcome.WantsSilence);
         Assert.Null(state.CallApp);
@@ -699,6 +755,59 @@ public class DecisionEngineTests
     }
 
     /// <summary>
+    /// And having given up on it, it must stay given up on. The latch is what makes the safety
+    /// net mean anything now that a call arms on the open microphone alone: without it the very
+    /// next tick would start the same dead call again, and every tick after that.
+    /// </summary>
+    [Fact]
+    public void ACallTheTimeoutGaveUpOnDoesNotImmediatelyStartAgain()
+    {
+        DetectionConfig config = CallConfig();
+        config.CallIdleTimeoutMs = 30000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+        RunCapture(state, config, ref clock, 60000, Microphone("Zoom.exe", -100));
+
+        // Ten more minutes of an open, silent microphone.
+        DecisionOutcome outcome = RunCapture(state, config, ref clock, 600000, Microphone("Zoom.exe", -100));
+
+        Assert.False(outcome.WantsSilence);
+        Assert.Null(state.CallApp);
+        Assert.Equal(2, state.TransitionsThisHour);
+
+        // Somebody speaks: the meeting was live after all, so the call comes back.
+        Assert.True(RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18)).WantsSilence);
+        Assert.NotNull(state.CallApp);
+    }
+
+    /// <summary>
+    /// Closing the microphone clears the latch, or a client that had once been timed out could
+    /// never start another call without somebody speaking into it first.
+    /// </summary>
+    [Fact]
+    public void TheNextMeetingArmsNormallyAfterATimedOutOne()
+    {
+        DetectionConfig config = CallConfig();
+        config.CallIdleTimeoutMs = 30000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+
+        RunCapture(state, config, ref clock, 4000, Microphone("Zoom.exe", -18));
+        RunCapture(state, config, ref clock, 60000, Microphone("Zoom.exe", -100));
+        Assert.Null(state.CallApp);
+
+        // Zoom closes the microphone, then opens it again for the next meeting.
+        RunCapture(state, config, ref clock, 20000, null);
+
+        Assert.True(RunCapture(state, config, ref clock, 1000, Microphone("Zoom.exe", -100)).WantsSilence);
+        Assert.NotNull(state.CallApp);
+    }
+
+    /// <summary>
     /// A listener who never unmutes still gets a call: the other end's audio is render traffic
     /// from the same application, and that keeps the hold alive past the idle timeout.
     /// </summary>
@@ -764,6 +873,43 @@ public class DecisionEngineTests
 
         // Quiet again, and the ordinary release applies rather than the call one.
         Assert.False(RunCapture(state, config, ref clock, 6000, Microphone("somerecorder.exe", -100)).WantsSilence);
+    }
+
+    /// <summary>
+    /// The flap warning is once an hour, and it was not. Driven through the real engine
+    /// because the bug was in the interaction: Ducked→Releasing is a second logged change at
+    /// the same transition count, so an equality test on the counter fired twice — and the
+    /// second balloon arrived seconds after the first, which is how it was noticed.
+    /// </summary>
+    [Fact]
+    public void TheFlapWarningIsRaisedOncePerHour()
+    {
+        DetectionConfig config = Config();
+        config.ReleaseMs = 5000;
+
+        var state = new DecisionState();
+        DateTimeOffset clock = Start;
+        int reports = 0;
+
+        // Pausing a video and starting it again, over and over: an evening of ordinary use.
+        for (int i = 0; i < 40; i++)
+        {
+            RunFor(state, config, ref clock, 4000, Session("chrome.exe", -18));
+            RunFor(state, config, ref clock, 8000);
+
+            // Asked twice a cycle, because the service asks on every logged change and both
+            // Ducked and Releasing are logged changes. That is the whole bug.
+            reports += state.ShouldReportFlapping(20) ? 1 : 0;
+            reports += state.ShouldReportFlapping(20) ? 1 : 0;
+        }
+
+        Assert.True(state.TransitionsThisHour >= 20, "the run should have flapped");
+        Assert.Equal(1, reports);
+
+        // A new hour re-arms it.
+        clock = clock.AddHours(2);
+        RunFor(state, config, ref clock, 4000, Session("chrome.exe", -18));
+        Assert.False(state.ShouldReportFlapping(20));
     }
 
     [Fact]

@@ -186,14 +186,22 @@ internal sealed class TvService : IDisposable
         // setting is off, so that turning it on mid-session does not inherit a stale baseline.
         WakeReason wake = _wake.Observe(now, endpointPresent, _probes.ReadUserIdle());
 
-        if (wake != WakeReason.None && settings.Policy.WakeAtStartup)
+        if (wake != WakeReason.None)
         {
-            NoteAwake(now, wake switch
+            // Outside the WakeAtStartup guard on purpose: whether the startup wake is switched
+            // on has nothing to do with whether an endpoint that vanished while the machine was
+            // away was the user reaching for the remote. See NoteAwake.
+            _endpointLostAt = null;
+
+            if (settings.Policy.WakeAtStartup)
             {
-                WakeReason.ClockJumped => "the clock jumped, so the machine was suspended",
-                WakeReason.OutputReturned => "the output device came back after a long absence",
-                _ => "input arrived after a long silence",
-            });
+                NoteAwake(now, wake switch
+                {
+                    WakeReason.ClockJumped => "the clock jumped, so the machine was suspended",
+                    WakeReason.OutputReturned => "the output device came back after a long absence",
+                    _ => "input arrived after a long silence",
+                });
+            }
         }
 
         ConfirmOrForgetAManualPowerOff(now, endpointPresent);
@@ -250,6 +258,23 @@ internal sealed class TvService : IDisposable
     {
         _startedAt = now;
         _windowTrigger = "after a wake";
+
+        // So is an unconfirmed endpoint loss, and this is the bug it fixes. The confirmation
+        // rule is "gone for fifteen seconds", and a machine that suspends satisfies it for
+        // free: no ticks run while it is away, so the first tick after a resume finds a loss
+        // that is hours old and calls it a manual power-off. The log said so twice in two
+        // days, on the same tick as the wake it was about to veto:
+        //
+        //   10:39:41.676  The machine is back (the clock jumped, so the machine was suspended)
+        //   10:39:41.677  Television wake paused until 11:39 (you turned it off)
+        //
+        // Nobody had touched the remote. The endpoint went away because the machine did, and
+        // an hour of not waking is the one thing that must not follow from that.
+        //
+        // Only the *pending* loss is dropped. A veto already confirmed — the set switched off
+        // by hand while somebody was sitting there — is left exactly where it is, because that
+        // one really was an instruction.
+        _endpointLostAt = null;
 
         Volatile.Write(ref _power, null);
         _powerQueryAttempts = 0;

@@ -18,6 +18,9 @@ namespace NoSilence.Detection;
 /// </remarks>
 internal sealed class DetectionService : IDisposable
 {
+    /// <summary>Transitions in an hour that mean the rules or the threshold need attention.</summary>
+    private const int FlapThreshold = 20;
+
     private readonly AudioSessionProbe _sessions;
     private readonly DeviceCatalog _catalog;
     private readonly SignalProbes _signals;
@@ -81,7 +84,23 @@ internal sealed class DetectionService : IDisposable
         }
 
         DetectionSnapshot snapshot = Capture();
+        string? callBefore = _state.CallApp;
+        string? exhaustedBefore = _state.ExhaustedCallSessionId;
         DecisionOutcome outcome = DecisionEngine.Evaluate(snapshot, _config, _state);
+
+        // The call safety net is meant almost never to fire: a conferencing client closes its
+        // microphone when the meeting ends, and that is what normally ends a call. One that
+        // holds the microphone open instead is exactly the thing this bound exists for, and
+        // the only way to find out which clients do it is to have said so in the log. Logged
+        // on the edge, or it would repeat four times a second for as long as the client sat
+        // there with the microphone open.
+        if (exhaustedBefore is null && _state.ExhaustedCallSessionId is not null)
+        {
+            _log.LogInformation(
+                "The call on {App} produced nothing for {Minutes:F0} min, so it is being treated as over even though the microphone is still open.",
+                callBefore ?? "an unknown application",
+                _config.CallIdleTimeoutMs / 60000d);
+        }
 
         // "Play through this call" expires with the call it was aimed at. An override that
         // outlived its call would be indistinguishable from the microphone signal being
@@ -96,17 +115,15 @@ internal sealed class DetectionService : IDisposable
         {
             _log.LogInformation("{Summary}", DecisionEngine.Summarise(outcome));
 
-            if (_state.TransitionsThisHour == 20)
+            // Automatic flap detection, so oscillation surfaces without anyone watching for
+            // it. Twenty an hour means the threshold or a rule needs attention. The latch
+            // that makes it once an hour lives on the state, where it can be tested.
+            if (_state.ShouldReportFlapping(FlapThreshold))
             {
-                // Automatic flap detection, so oscillation surfaces without anyone watching
-                // for it. Twenty an hour means the threshold or a rule needs attention.
                 _log.LogWarning(
                     "Play/silence has flipped {Count} times in the last hour, which suggests the detection threshold or a rule needs adjusting. Try --diagnose.",
                     _state.TransitionsThisHour);
 
-                // ...and say so somewhere anyone will see. This warning fired twenty-two times
-                // across two days of real use and was found afterwards, in the log, by someone
-                // going looking for it.
                 Flapping?.Invoke(this, _state.TransitionsThisHour);
             }
         }

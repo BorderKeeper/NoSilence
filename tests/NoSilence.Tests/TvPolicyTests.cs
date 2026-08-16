@@ -383,24 +383,56 @@ public class TvPolicyTests
     }
 
     /// <summary>
-    /// A machine that comes up into a call or a game has nothing to play, so there is nothing
-    /// to turn a television on for.
+    /// Taken from the log of 14 August. NoSilence launched at 09:45:29 to a television in
+    /// standby, Chrome made a sound three seconds later, and the music stayed down until
+    /// 10:20 — so the fifteen seconds of continuously wanting to play never happened inside
+    /// the five-minute window and the set was still dark at lunchtime.
     /// </summary>
+    /// <remarks>
+    /// The television is the output device. Something else playing is not a reason to leave
+    /// it off; it is a reason nobody can hear that either.
+    /// </remarks>
     [Fact]
-    public void TheStartupWakeWaitsForSomethingToPlay()
+    public void TheStartupWakeDoesNotWaitForSilenceFromEverythingElse()
     {
         TvPolicyConfig config = Config();
         var state = new TvPolicyState();
 
-        for (int i = 0; i <= 60; i += 10)
+        Assert.Equal(TvAction.None, TvPolicy.Decide(
+            Input(Start, wantsToPlay: false, startedAt: Start), config, state));
+
+        Assert.Equal(TvAction.None, TvPolicy.Decide(
+            Input(Start.AddSeconds(10), wantsToPlay: false, startedAt: Start), config, state));
+
+        Assert.Equal(TvAction.Wake, TvPolicy.Decide(
+            Input(Start.AddSeconds(20), wantsToPlay: false, startedAt: Start), config, state));
+    }
+
+    /// <summary>
+    /// The startup wake is timed from sitting down, so a machine that is busy for the whole
+    /// window still gets its television — and only once, because the cooldown applies.
+    /// </summary>
+    [Fact]
+    public void TheStartupWakeFiresOnceEvenWhenNothingEverWantsToPlay()
+    {
+        TvPolicyConfig config = Config();
+        config.WakeEnabled = false;
+        var state = new TvPolicyState();
+
+        var actions = new List<TvAction>();
+        for (int i = 0; i <= 280; i += 20)
         {
-            Assert.Equal(TvAction.None, TvPolicy.Decide(
-                Input(Start.AddSeconds(i), wantsToPlay: false, startedAt: Start), config, state));
+            TvAction action = TvPolicy.Decide(
+                Input(Start.AddSeconds(i), wantsToPlay: false, startedAt: Start), config, state);
+
+            if (action != TvAction.None)
+            {
+                actions.Add(action);
+                TvPolicy.RecordPowerCommand(Start.AddSeconds(i), state);
+            }
         }
 
-        // The call ends inside the window: the shortened wait starts from there, not from launch.
-        Assert.Equal(TvAction.None, TvPolicy.Decide(Input(Start.AddSeconds(65), startedAt: Start), config, state));
-        Assert.Equal(TvAction.Wake, TvPolicy.Decide(Input(Start.AddSeconds(85), startedAt: Start), config, state));
+        Assert.Equal([TvAction.Wake], actions);
     }
 
     /// <summary>The television is already on, which is the whole reason to trust the endpoint.</summary>

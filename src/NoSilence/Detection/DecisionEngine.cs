@@ -185,12 +185,14 @@ internal static class DecisionEngine
         if (!config.MicrophoneSignal || snapshot.Capture.Count == 0)
         {
             state.EndCall();
+            state.ClearExhaustedCall();
             return false;
         }
 
         var micRule = new ResolvedRule(RuleMode.Trigger, config.MicThresholdDb, config.MicMinDurationMs, "microphone");
         bool triggered = false;
         bool callStillOpen = false;
+        bool exhaustedCallStillOpen = false;
 
         foreach (SessionObservation session in snapshot.Capture)
         {
@@ -220,23 +222,33 @@ internal static class DecisionEngine
                 ? session.State == SessionActivity.Active
                 : stats.NoisySince is not null;
 
-            // A call is a context, not a sound. Once an application that makes calls has
-            // carried real microphone signal, it holds silence for as long as it keeps the
-            // capture session open — through every pause for breath, which the level test
-            // alone could never do.
+            // A call is a context, not a sound, and the context is the microphone being open.
+            // A conferencing client only holds an *active* capture session while you are
+            // actually in a meeting: it opens one on joining and drops it on leaving.
             //
-            // Note what arms it: `speaking` is the exact condition that used to trigger
-            // directly. Nothing new starts ducking here, only the stopping changes. That
-            // asymmetry is deliberate, because the dangerous version of this feature is the
-            // one where a client sitting idle in the tray with an open microphone — OBS,
-            // Voicemeeter, Zoom between meetings — silences the music indefinitely. An idle
-            // microphone carries no sustained signal, so it never arms a call.
+            // Arming used to require sustained signal as well — your voice — and that was
+            // wrong in both directions. Joining a meeting and listening silently left the
+            // music playing over the top of it until you happened to speak, which is what
+            // the snooze menu kept being used for. And once armed, a call that went quiet
+            // for two minutes was declared over and then re-armed the moment anybody made a
+            // noise, so a single meeting produced a string of ducks, resumes and balloons.
+            //
+            // What keeps this safe is the rule, not the level: CaptureMode.Call is set only
+            // on applications that make calls. OBS, Voicemeeter and the headset utilities
+            // that hold a capture session open for ever are judged on level exactly as
+            // before, and so is anything with no rule at all.
             bool open = appRule.CaptureMode == CaptureMode.Call && session.State == SessionActivity.Active;
 
             if (open && speaking)
             {
-                state.BeginCall(session.SessionInstanceId, session.Describe(), session.ExeName);
+                // Real signal revives a call the idle timeout had given up on.
+                state.ReviveCall(session.SessionInstanceId);
                 state.NoteCallSignal(snapshot.At);
+            }
+
+            if (open && !state.IsCallExhausted(session.SessionInstanceId))
+            {
+                state.BeginCall(session.SessionInstanceId, session.Describe(), session.ExeName, snapshot.At);
             }
 
             // The hold is bounded. A client that keeps its capture session open after the
@@ -247,6 +259,16 @@ internal static class DecisionEngine
 
             bool holding = open && alive && state.CallSessionId == session.SessionInstanceId;
             callStillOpen |= holding;
+
+            // The safety net firing, latched to the session that exhausted it. Without the
+            // latch the next tick would arm the same dead call again from the same open
+            // microphone, and the timeout would achieve nothing whatsoever.
+            if (open && !alive && state.CallSessionId == session.SessionInstanceId)
+            {
+                state.NoteCallExhausted(session.SessionInstanceId);
+            }
+
+            exhaustedCallStillOpen |= open && state.IsCallExhausted(session.SessionInstanceId);
 
             // Note that the call is still tracked while it is being played through — arming
             // and holding both continue. That is what lets the override expire on its own when
@@ -277,6 +299,13 @@ internal static class DecisionEngine
         if (!callStillOpen)
         {
             state.EndCall();
+        }
+
+        // Forgotten as soon as the session it belongs to closes, so the next meeting from the
+        // same client arms normally.
+        if (!exhaustedCallStillOpen)
+        {
+            state.ClearExhaustedCall();
         }
 
         return triggered;
@@ -464,6 +493,7 @@ internal static class DecisionEngine
             {
                 state.TransitionWindowStartedAt = at;
                 state.TransitionsThisHour = 0;
+                state.ClearFlapReport();
             }
 
             state.TransitionsThisHour++;

@@ -16,6 +16,7 @@ Its own audio is excluded by process ID.
 | Wait before going quiet | 2000 ms | How long a source must keep making sound |
 | Wait before resuming | 5000 ms | How long everything must stay quiet |
 | Wait before resuming after a call | 15000 ms | Calls get their own, longer wait — see below |
+| Call idle timeout | 30 min | Safety net only: how long a call may produce nothing at all |
 | Fade out / in | 400 ms / 3000 ms | Fast out, gentle back in |
 | Poll interval | 250 ms | |
 
@@ -88,29 +89,45 @@ WhatsApp — is treated differently on the microphone:
 
 | | |
 |---|---|
-| **Arms** | Sustained microphone signal, exactly the condition that used to duck directly |
-| **Holds** | For as long as that application keeps the capture session open |
-| **Ends** | When the capture session closes, or after 2 minutes with nothing from either direction |
+| **Arms** | That application opening an active capture session — joining the meeting |
+| **Holds** | For as long as it keeps that session open |
+| **Ends** | When the capture session closes, or after 30 minutes with nothing from either direction |
 | **Then** | 15 seconds of quiet before the music returns, not 5 |
 
-Note what the arming condition is *not*. It is not "the microphone is open" — that is what
-`TreatActiveCaptureAsNoise` does, and the reason it is off by default is that OBS, Voicemeeter,
-NVIDIA Broadcast and half the headset utilities hold a capture session open permanently. An
-idle microphone carries no sustained signal, so it never starts a call. Nothing new begins
-ducking here; only the stopping changed.
+The arming condition used to be *sustained microphone signal* — your voice — with the reasoning
+that "the microphone is open" is what `TreatActiveCaptureAsNoise` does, and that setting is off
+by default because OBS, Voicemeeter, NVIDIA Broadcast and half the headset utilities hold a
+capture session open permanently.
 
-The two-minute idle timeout is the safety net, and it exists because "hold while the microphone
-is open" would otherwise mean "hold until the application exits" for any client that keeps the
-device open after a meeting ends. A muted listener is still covered, because the other end
-talking is audio from the same application and that keeps the call alive.
+That reasoning was right about the setting and wrong about the rule. The global setting applies
+to everything; this applies only to applications the rules table names as making calls, and
+those open a capture session when you join a meeting and drop it when you leave. Judging them
+on level instead was wrong in both directions:
+
+- **Joining a meeting and listening did not silence the music**, until you happened to speak.
+  Sitting quietly is most of most meetings, so the answer in practice was the Snooze menu.
+- **Two minutes of nobody speaking ended the call**, and the next word started a new one. A
+  single Zoom meeting on 14 August appears in the log as seven calls, with the music surfacing
+  for up to three minutes in between — and a balloon each time it re-armed.
+
+Everything else on the microphone is still judged on level, including any application with no
+rule, which is what keeps the always-on capture tools out of it.
+
+The idle timeout is the safety net for a client that keeps the microphone open after its
+meeting ends, and at thirty minutes it should be close to unreachable — the client closing the
+session is what normally ends a call. When it does fire it says so in the log, and it latches:
+the same session cannot start another call until something is actually heard through it, or the
+timeout would be undone by the very next tick. A muted listener is still covered, because the
+other end talking is audio from the same application and that keeps the call alive.
 
 While a call is held the tray says **In a call — Zoom** rather than quoting a level, because
 "peaked at −18.2 dBFS" is a true statement about a sample and a useless one about why the music
 stopped.
 
-**Overruling it.** A balloon when the call starts, and a **Play through this call** item in the
-menu while it lasts. Either one keeps the music up for the rest of that call and then turns
-itself off. It covers the application's own audio as well as the microphone — suppressing only
+**Overruling it.** A **Play through this call** item in the menu while it lasts, and a balloon
+when the call starts *if notifications are set to All* — it is not an error, and at the default
+level it was simply noise. Either one keeps the music up for the rest of that call and then
+turns itself off. It covers the application's own audio as well as the microphone — suppressing only
 the microphone would leave the other end talking still ducking you — and it resumes
 immediately rather than waiting out the release, because you just asked for it by hand.
 
@@ -173,3 +190,8 @@ find out without having to watch for it.
 
 Usually it means the threshold is too low for something on your machine, or an application
 needs a rule. Open **What's playing** and look for the row that keeps turning bold.
+
+It is a **log warning at every notification level, and a balloon only at All**. Flapping is
+often the app working exactly as intended: an evening of pausing videos and picking the next
+one flips play/silence dozens of times, and being told about that is not useful. The warning is
+for the person who has gone looking for it, which is what the log is for.
