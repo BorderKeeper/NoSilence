@@ -1,9 +1,19 @@
 # NoSilence
 
+[![CI](https://github.com/BorderKeeper/NoSilence/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/BorderKeeper/NoSilence/actions/workflows/ci.yml)
+[![Release](https://github.com/BorderKeeper/NoSilence/actions/workflows/release.yml/badge.svg)](https://github.com/BorderKeeper/NoSilence/actions/workflows/release.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fborderkeeper.github.io%2FNoSilence%2Fcoverage.json)](https://github.com/BorderKeeper/NoSilence/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/BorderKeeper/NoSilence?sort=semver&label=latest&color=2f6fe0)](https://github.com/BorderKeeper/NoSilence/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BorderKeeper/NoSilence/total?color=2f6fe0)](https://github.com/BorderKeeper/NoSilence/releases)
+![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)
+![.NET 9](https://img.shields.io/badge/.NET-9.0-512BD4?logo=dotnet&logoColor=white)
+
 Plays music on a secondary audio output — a TV, a spare speaker — but only while your PC is
 otherwise quiet. Start a game, a video or a call and it fades out; stop, and it fades back in.
 
 It lives in the system tray and is meant to be forgotten about.
+
+**[borderkeeper.github.io/NoSilence](https://borderkeeper.github.io/NoSilence/)**
 
 ## Getting started
 
@@ -90,6 +100,13 @@ Put a file named `nosilence.portable` beside the executable and it keeps everyth
 ```
 dotnet build NoSilence.sln
 dotnet test  NoSilence.sln
+dotnet test  NoSilence.sln --collect:"XPlat Code Coverage"
 ```
 
 Requires the .NET 9 SDK. Windows only — it is built on WASAPI throughout.
+
+The coverage badge is line coverage over the whole assembly, so the settings UI, the WASAPI
+interop and the process entry points are all in the denominator at zero, and will stay there.
+The detection logic the tests exist for sits far above the headline figure; playback and the
+television code sit below it. CI writes the number to `coverage.json` on the site after every
+run on `master`, and the badge reads it from there — no coverage service is involved.

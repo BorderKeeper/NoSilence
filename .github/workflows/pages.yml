@@ -1,15 +1,18 @@
 name: Site
 
-# The site is static — no build step, no dependencies. Publishing is copying `site/`
-# into a Pages artifact, so this only runs when something in there changes.
+# Runs after CI rather than on its own push trigger, because the page carries CI's coverage
+# figure and there is no point publishing a number before the run that produced it has passed.
+# A failed CI therefore leaves the last good site up.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [master]
-    paths: ["site/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read # to read the coverage artifact off the CI run
   pages: write
   id-token: write
 
@@ -21,13 +24,29 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
+      # workflow_run checks out the default branch by default, which for a queued run is not
+      # necessarily the commit CI tested. Name the SHA outright.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      # Overwrites the coverage.json committed in site/, which exists so the page is complete
+      # when served from a working copy and so the badge survives a manual dispatch.
+      - name: Take the coverage figure from the CI run
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-badge
+          path: site
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
 
       - uses: actions/configure-pages@v5
 

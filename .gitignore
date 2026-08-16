@@ -147,6 +147,10 @@ coverage*.json
 coverage*.xml
 coverage*.info
 
+# Not a coverlet output: the shields.io endpoint the coverage badge reads, published with the
+# site. CI overwrites it on every run on master; the committed copy is the fallback.
+!site/coverage.json
+
 # Visual Studio code coverage results
 *.coverage
 *.coveragexml

@@ -24,12 +24,56 @@ jobs:
         run: dotnet build NoSilence.sln --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test NoSilence.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+        run: >
+          dotnet test NoSilence.sln --configuration Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
+
+      # Turned into a shields.io endpoint rather than sent to a coverage service: the figure is
+      # already public, and this needs no account and no token. The Site workflow picks the file
+      # up from this run's artifacts and serves it from the Pages site, which is where the badge
+      # in the README reads it from.
+      - name: Coverage figure
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+          if (-not $report) { throw "The test run produced no coverage.cobertura.xml." }
+
+          [xml]$xml = Get-Content $report.FullName
+          $pct = [math]::Round([double]$xml.coverage.'line-rate' * 100, 1)
+
+          $colour = if     ($pct -ge 80) { 'brightgreen' }
+                    elseif ($pct -ge 60) { 'green' }
+                    elseif ($pct -ge 40) { 'yellow' }
+                    elseif ($pct -ge 20) { 'orange' }
+                    else                 { 'red' }
+
+          New-Item -ItemType Directory -Force -Path badge | Out-Null
+          [ordered]@{
+            schemaVersion = 1
+            label         = 'coverage'
+            message       = "$pct%"
+            color         = $colour
+            cacheSeconds  = 1800
+          } | ConvertTo-Json | Out-File badge/coverage.json -Encoding utf8
+
+          "Line coverage **$pct%** — $($xml.coverage.'lines-covered') of $($xml.coverage.'lines-valid') lines." |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload coverage figure
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: badge/coverage.json
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: "**/TestResults/*.trx"
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/**/coverage.cobertura.xml
           if-no-files-found: ignore
